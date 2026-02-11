@@ -70,16 +70,12 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs) {
         padding: 6px 12px;
         font-size: 12px;
         font-family: inherit;
-        border: 1px solid var(--color-border, #d0d0d0);
+        border: 1px solid;
         border-radius: 6px;
-        background: var(--color-bg-primary, #fff);
-        color: var(--color-text-primary, #1a1a1a);
+        background: transparent;
         cursor: pointer;
         text-decoration: none;
         transition: background 0.15s;
-      }
-      #toolbar button:hover, #toolbar a:hover {
-        background: var(--color-bg-secondary, #f5f5f5);
       }
 
       #error {
@@ -94,7 +90,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs) {
     </style>
   </head>
   <body>
-    <div id="loading"><div class="spinner"></div>Loading diagram...</div>
+    <div id="loading"><div class="spinner"></div>Creating diagram...</div>
     <div id="error"></div>
     <div id="diagram-container"></div>
     <div id="toolbar">
@@ -148,7 +144,7 @@ function generateDrawioEditUrl(xml) {
   const compressed = pako.deflateRaw(encoded);
   const base64 = btoa(Array.from(compressed, (b) => String.fromCharCode(b)).join(""));
   const createObj = { type: "xml", compressed: true, data: base64 };
-  return "https://app.diagrams.net/#create=" + encodeURIComponent(JSON.stringify(createObj));
+  return "https://app.diagrams.net/?pv=0&grid=0#create=" + encodeURIComponent(JSON.stringify(createObj));
 }
 
 async function renderDiagram(xml) {
