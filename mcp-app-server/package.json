@@ -8,17 +8,24 @@
     "drawio-mcp-app": "src/index.js"
   },
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "build:worker": "node src/build-html.js",
+    "dev:worker": "npm run build:worker && wrangler dev",
+    "deploy": "npm run build:worker && wrangler deploy"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/ext-apps": "latest",
     "@modelcontextprotocol/sdk": "latest",
     "cors": "^2",
     "express": "^4",
     "pako": "^2.1.0",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
   }
 }
