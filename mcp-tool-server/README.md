@@ -1,6 +1,11 @@
 # Draw.io MCP Tool Server
 
-The original MCP server that opens diagrams directly in the draw.io editor. Published as [`@drawio/mcp`](https://www.npmjs.com/package/@drawio/mcp) on npm.
+The official [draw.io](https://www.draw.io) MCP server that opens diagrams directly in the draw.io editor. Supports XML, CSV, and Mermaid.js formats with lightbox and dark mode options.
+
+This package is part of the [drawio-mcp](https://github.com/jgraph/drawio-mcp) repository, which also includes:
+
+- **[MCP App Server](https://github.com/jgraph/drawio-mcp/tree/main/mcp-app-server)** — Renders diagrams inline in AI chat interfaces. Hosted at `https://mcp.draw.io/mcp` — no install required.
+- **[Project Instructions](https://github.com/jgraph/drawio-mcp/tree/main/project-instructions)** — Zero-install approach using Claude Project instructions.
 
 ## Features
 
@@ -110,3 +115,10 @@ Opens the draw.io editor with a Mermaid.js diagram.
 3. A draw.io URL is generated with the `#create` hash parameter
 4. The URL is returned to the LLM, which can present it to the user
 5. Opening the URL loads draw.io with the diagram ready to view/edit
+
+## Related Resources
+
+- [draw.io](https://www.draw.io) - Free online diagram editor
+- [draw.io Desktop](https://github.com/jgraph/drawio-desktop) - Desktop application
+- [drawio-mcp on GitHub](https://github.com/jgraph/drawio-mcp) - Full repository with all three approaches
+- [MCP Specification](https://modelcontextprotocol.io/)
