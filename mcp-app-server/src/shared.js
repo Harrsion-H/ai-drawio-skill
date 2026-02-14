@@ -15,7 +15,8 @@ import { z } from "zod";
  * @param {string} pakoDeflateJs - The pako deflate browser bundle.
  * @returns {string} Self-contained HTML string.
  */
-export function buildHtml(appWithDepsJs, pakoDeflateJs) {
+export function buildHtml(appWithDepsJs, pakoDeflateJs)
+{
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -123,41 +124,73 @@ var currentXml = null;
 
 var app = new App({ name: "draw.io Diagram Viewer", version: "1.0.0" });
 
-function showError(message) {
+function showError(message)
+{
   loadingEl.style.display = "none";
   errorEl.style.display = "block";
   errorEl.textContent = message;
 }
 
-function waitForGraphViewer() {
-  return new Promise((resolve, reject) => {
+function waitForGraphViewer()
+{
+  return new Promise(function(resolve, reject)
+  {
     if (typeof GraphViewer !== "undefined") { resolve(); return; }
-    let attempts = 0;
-    const maxAttempts = 100; // 10 s
-    const interval = setInterval(() => {
+
+    var attempts = 0;
+    var maxAttempts = 100; // 10 s
+    var interval = setInterval(function()
+    {
       attempts++;
-      if (typeof GraphViewer !== "undefined") { clearInterval(interval); resolve(); }
-      else if (attempts >= maxAttempts) { clearInterval(interval); reject(new Error("draw.io viewer failed to load")); }
+
+      if (typeof GraphViewer !== "undefined")
+      {
+        clearInterval(interval);
+        resolve();
+      }
+      else if (attempts >= maxAttempts)
+      {
+        clearInterval(interval);
+        reject(new Error("draw.io viewer failed to load"));
+      }
     }, 100);
   });
 }
 
-function generateDrawioEditUrl(xml) {
-  const encoded = encodeURIComponent(xml);
-  const compressed = pako.deflateRaw(encoded);
-  const base64 = btoa(Array.from(compressed, (b) => String.fromCharCode(b)).join(""));
-  const createObj = { type: "xml", compressed: true, data: base64 };
+function generateDrawioEditUrl(xml)
+{
+  var encoded = encodeURIComponent(xml);
+  var compressed = pako.deflateRaw(encoded);
+  var base64 = btoa(Array.from(compressed, function(b) { return String.fromCharCode(b); }).join(""));
+  var createObj = { type: "xml", compressed: true, data: base64 };
+
   return "https://app.diagrams.net/?pv=0&grid=0#create=" + encodeURIComponent(JSON.stringify(createObj));
 }
 
-async function renderDiagram(xml) {
-  try { await waitForGraphViewer(); }
-  catch(e) { showError("Failed to load the draw.io viewer. Check your network connection."); return; }
+async function renderDiagram(xml)
+{
+  try
+  {
+    await waitForGraphViewer();
+  }
+  catch(e)
+  {
+    showError("Failed to load the draw.io viewer. Check your network connection.");
+    return;
+  }
 
   containerEl.innerHTML = "";
-  const config = { highlight: "#0000ff", "dark-mode": "auto", nav: true,
-    resize: true, toolbar: "zoom layers tags", xml: xml };
-  const graphDiv = document.createElement("div");
+
+  var config = {
+    highlight: "#0000ff",
+    "dark-mode": "auto",
+    nav: true,
+    resize: true,
+    toolbar: "zoom layers tags",
+    xml: xml
+  };
+
+  var graphDiv = document.createElement("div");
   graphDiv.className = "mxgraph";
   graphDiv.setAttribute("data-mxgraph", JSON.stringify(config));
   containerEl.appendChild(graphDiv);
@@ -172,23 +205,45 @@ async function renderDiagram(xml) {
 
   // GraphViewer renders asynchronously; nudge the SDK's ResizeObserver
   // by explicitly sending size after the SVG is in the DOM.
-  requestAnimationFrame(() => {
+  requestAnimationFrame(function()
+  {
     var el = document.documentElement;
     var w = Math.ceil(el.scrollWidth);
     var h = Math.ceil(el.scrollHeight);
-    if (app.sendSizeChanged) app.sendSizeChanged({ width: w, height: h });
+
+    if (app.sendSizeChanged)
+    {
+      app.sendSizeChanged({ width: w, height: h });
+    }
   });
 }
 
-app.ontoolresult = (result) => {
-  const textBlock = result.content?.find((c) => c.type === "text");
-  if (textBlock && textBlock.type === "text") { renderDiagram(textBlock.text); }
-  else { showError("No diagram XML received."); }
+app.ontoolresult = function(result)
+{
+  var textBlock = result.content && result.content.find(function(c) { return c.type === "text"; });
+
+  if (textBlock && textBlock.type === "text")
+  {
+    renderDiagram(textBlock.text);
+  }
+  else
+  {
+    showError("No diagram XML received.");
+  }
 };
 
-openDrawioBtn.addEventListener("click", () => { if (drawioEditUrl) app.openLink({ url: drawioEditUrl }); });
-copyXmlBtn.addEventListener("click", () => {
+openDrawioBtn.addEventListener("click", function()
+{
+  if (drawioEditUrl)
+  {
+    app.openLink({ url: drawioEditUrl });
+  }
+});
+
+copyXmlBtn.addEventListener("click", function()
+{
   if (!currentXml) return;
+
   var ta = document.createElement("textarea");
   ta.value = currentXml;
   ta.style.position = "fixed";
@@ -198,9 +253,13 @@ copyXmlBtn.addEventListener("click", () => {
   document.execCommand("copy");
   document.body.removeChild(ta);
   copyXmlBtn.textContent = "Copied!";
-  setTimeout(() => { copyXmlBtn.textContent = "Copy to Clipboard"; }, 2000);
+  setTimeout(function() { copyXmlBtn.textContent = "Copy to Clipboard"; }, 2000);
 });
-fullscreenBtn.addEventListener("click", () => { app.requestDisplayMode({ mode: "fullscreen" }); });
+
+fullscreenBtn.addEventListener("click", function()
+{
+  app.requestDisplayMode({ mode: "fullscreen" });
+});
 
 app.connect();
     </script>
@@ -214,15 +273,28 @@ app.connect();
  * @param {string} raw - The raw content of app-with-deps.js.
  * @returns {string} The processed bundle with exports stripped and App alias added.
  */
-export function processAppBundle(raw) {
+export function processAppBundle(raw)
+{
   const exportMatch = raw.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
-  if (!exportMatch) throw new Error("Could not find export statement in app-with-deps.js");
-  const exportEntries = exportMatch[1].split(",").map(e => {
+
+  if (!exportMatch)
+  {
+    throw new Error("Could not find export statement in app-with-deps.js");
+  }
+
+  const exportEntries = exportMatch[1].split(",").map(function(e)
+  {
     const parts = e.trim().split(/\s+as\s+/);
     return { local: parts[0], exported: parts[1] || parts[0] };
   });
-  const appEntry = exportEntries.find(e => e.exported === "App");
-  if (!appEntry) throw new Error("Could not find App export in app-with-deps.js");
+
+  const appEntry = exportEntries.find(function(e) { return e.exported === "App"; });
+
+  if (!appEntry)
+  {
+    throw new Error("Could not find App export in app-with-deps.js");
+  }
+
   return raw.slice(0, exportMatch.index) + `\nvar App = ${appEntry.local};\n`;
 }
 
@@ -233,7 +305,8 @@ export function processAppBundle(raw) {
  * @param {object} [serverOptions] - Optional McpServer constructor options (e.g. jsonSchemaValidator).
  * @returns {McpServer}
  */
-export function createServer(html, serverOptions = {}) {
+export function createServer(html, serverOptions = {})
+{
   const server = new McpServer(
     { name: "drawio-mcp-app", version: "1.0.0" },
     serverOptions,
@@ -248,7 +321,8 @@ export function createServer(html, serverOptions = {}) {
       title: "Create Diagram",
       description:
         "Creates and displays an interactive draw.io diagram. Pass draw.io XML (mxGraphModel format) to render it inline. IMPORTANT: The XML must be well-formed. Do NOT use double hyphens (--) inside XML comments, as this is invalid XML and will break the parser. Use single hyphens or rephrase instead (e.g. <!-- Order 1 to OrderItem --> not <!-- Order 1 --- OrderItem -->).",
-      inputSchema: {
+      inputSchema:
+      {
         xml: z
           .string()
           .describe(
@@ -257,7 +331,8 @@ export function createServer(html, serverOptions = {}) {
       },
       _meta: { ui: { resourceUri } },
     },
-    async ({ xml }) => {
+    async function({ xml })
+    {
       return { content: [{ type: "text", text: xml }] };
     }
   );
@@ -267,16 +342,21 @@ export function createServer(html, serverOptions = {}) {
     "Draw.io Diagram Viewer",
     resourceUri,
     { mimeType: RESOURCE_MIME_TYPE },
-    async () => {
+    async function()
+    {
       return {
-        contents: [
+        contents:
+        [
           {
             uri: resourceUri,
             mimeType: RESOURCE_MIME_TYPE,
             text: html,
-            _meta: {
-              ui: {
-                csp: {
+            _meta:
+            {
+              ui:
+              {
+                csp:
+                {
                   resourceDomains: ["https://viewer.diagrams.net"],
                   connectDomains: ["https://viewer.diagrams.net"],
                 },

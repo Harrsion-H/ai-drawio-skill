@@ -89,6 +89,26 @@ When generating draw.io XML, the output **must** be well-formed XML:
 - **NEVER use double hyphens (`--`) inside XML comments.** `--` is illegal inside `<!-- -->` per the XML spec and causes parse errors. Use single hyphens or rephrase (e.g. `<!-- Order 1 to OrderItem -->` not `<!-- Order 1 --- OrderItem -->`).
 - Escape special characters in attribute values (`&amp;`, `&lt;`, `&gt;`, `&quot;`).
 
+## Coding Conventions
+
+- **Allman brace style**: Opening braces go on their own line for all control structures, functions, objects, and callbacks.
+
+```js
+function example()
+{
+  if (condition)
+  {
+    doSomething();
+  }
+  else
+  {
+    doOther();
+  }
+}
+```
+
+- Prefer `function()` expressions over arrow functions for callbacks.
+
 ## Troubleshooting
 
 | Error | Cause | Solution |

@@ -56,6 +56,12 @@ The Worker uses a **single Durable Object** (`MCPSessionManager`) to manage all 
 - CSP config goes on the **resource contents** `_meta.ui.csp`, not on the tool's `_meta.ui`
 - TypeScript narrowing: use `if (block.type === "text")` before accessing `.text` on content blocks
 
+## Coding Conventions
+
+- **Allman brace style**: Opening braces go on their own line for all control structures, functions, objects, and callbacks.
+- Prefer `function()` expressions over arrow functions for callbacks.
+- See the root `CLAUDE.md` for examples.
+
 ## Scripts
 
 ```bash

@@ -30,27 +30,39 @@ const html = buildHtml(appWithDepsJs, pakoDeflateJs);
 
 // --- Transport setup ---
 
-async function startStreamableHTTPServer() {
+async function startStreamableHTTPServer()
+{
   const port = parseInt(process.env.PORT ?? "3001", 10);
   const app = createMcpExpressApp({ host: "0.0.0.0" });
   app.use(cors());
 
-  app.all("/mcp", async (req, res) => {
+  app.all("/mcp", async function(req, res)
+  {
     const server = createServer(html);
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new StreamableHTTPServerTransport(
+    {
       sessionIdGenerator: undefined,
     });
-    res.on("close", () => {
-      transport.close().catch(() => {});
-      server.close().catch(() => {});
+
+    res.on("close", function()
+    {
+      transport.close().catch(function() {});
+      server.close().catch(function() {});
     });
-    try {
+
+    try
+    {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
-    } catch (error) {
+    }
+    catch (error)
+    {
       console.error("MCP error:", error);
-      if (!res.headersSent) {
-        res.status(500).json({
+
+      if (!res.headersSent)
+      {
+        res.status(500).json(
+        {
           jsonrpc: "2.0",
           error: { code: -32603, message: "Internal server error" },
           id: null,
@@ -59,31 +71,40 @@ async function startStreamableHTTPServer() {
     }
   });
 
-  const httpServer = app.listen(port, () => {
+  const httpServer = app.listen(port, function()
+  {
     console.log(`MCP App server listening on http://localhost:${port}/mcp`);
   });
 
-  const shutdown = () => {
+  const shutdown = function()
+  {
     console.log("\nShutting down...");
-    httpServer.close(() => process.exit(0));
+    httpServer.close(function() { process.exit(0); });
   };
+
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
 
-async function startStdioServer() {
+async function startStdioServer()
+{
   await createServer(html).connect(new StdioServerTransport());
 }
 
-async function main() {
-  if (process.argv.includes("--stdio")) {
+async function main()
+{
+  if (process.argv.includes("--stdio"))
+  {
     await startStdioServer();
-  } else {
+  }
+  else
+  {
     await startStreamableHTTPServer();
   }
 }
 
-main().catch((e) => {
+main().catch(function(e)
+{
   console.error(e);
   process.exit(1);
 });

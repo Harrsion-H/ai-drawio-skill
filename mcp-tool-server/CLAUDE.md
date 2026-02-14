@@ -40,6 +40,12 @@ Opens draw.io with Mermaid.js syntax. **Recommended default** — handles flowch
 | Custom styling, precise positioning | `open_drawio_xml` | High |
 | Org chart from data | `open_drawio_csv` | Medium |
 
+## Coding Conventions
+
+- **Allman brace style**: Opening braces go on their own line for all control structures, functions, objects, and callbacks.
+- Prefer `function()` expressions over arrow functions for callbacks.
+- See the root `CLAUDE.md` for examples.
+
 ## Development
 
 ```bash
