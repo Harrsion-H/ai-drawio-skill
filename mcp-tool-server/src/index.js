@@ -101,42 +101,13 @@ function generateDrawioUrl(data, type, options = {})
   return DRAWIO_BASE_URL + (paramsStr ? "?" + paramsStr : "") + createHash;
 }
 
-/**
- * Fetches content from a URL
- */
-async function fetchContent(url)
-{
-  const response = await fetch(url);
-  if (!response.ok)
-  {
-    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
-  }
-  return response.text();
-}
-
-/**
- * Determines if the input is a URL
- */
-function isUrl(input)
-{
-  try
-  {
-    new URL(input);
-    return true;
-  }
-  catch
-  {
-    return false;
-  }
-}
-
 // Define the tools
 const tools =
 [
   {
     name: "open_drawio_xml",
     description:
-      "Opens the draw.io editor with a diagram from XML content or a URL to XML content. " +
+      "Opens the draw.io editor with a diagram from XML content. " +
       "Use this to view, edit, or create diagrams in draw.io format. " +
       "The XML should be valid draw.io/mxGraph XML format. " +
       "IMPORTANT: Do NOT use double hyphens (--) inside XML comments, as this is invalid XML and will break the parser. Use single hyphens or rephrase instead.",
@@ -149,8 +120,7 @@ const tools =
         {
           type: "string",
           description:
-            "The draw.io XML content or a URL pointing to XML content. " +
-            "If a URL is provided, the content will be fetched automatically.",
+            "The draw.io XML content in mxGraphModel format.",
         },
         lightbox:
         {
@@ -170,7 +140,7 @@ const tools =
   {
     name: "open_drawio_csv",
     description:
-      "Opens the draw.io editor with a diagram generated from CSV data or a URL to CSV data. " +
+      "Opens the draw.io editor with a diagram generated from CSV data. " +
       "The CSV format should follow draw.io's CSV import specification which allows " +
       "creating org charts, flowcharts, and other diagrams from tabular data.",
     inputSchema:
@@ -182,9 +152,7 @@ const tools =
         {
           type: "string",
           description:
-            "The CSV content or a URL pointing to CSV content. " +
-            "If a URL is provided, the content will be fetched automatically. " +
-            "The CSV should follow draw.io's CSV import format.",
+            "The CSV content following draw.io's CSV import format.",
         },
         lightbox:
         {
@@ -204,7 +172,7 @@ const tools =
   {
     name: "open_drawio_mermaid",
     description:
-      "Opens the draw.io editor with a diagram generated from Mermaid.js syntax or a URL to Mermaid content. " +
+      "Opens the draw.io editor with a diagram generated from Mermaid.js syntax. " +
       "Supports flowcharts, sequence diagrams, class diagrams, state diagrams, " +
       "entity relationship diagrams, and more using Mermaid.js syntax.",
     inputSchema:
@@ -216,8 +184,7 @@ const tools =
         {
           type: "string",
           description:
-            "The Mermaid.js diagram definition or a URL pointing to Mermaid content. " +
-            "If a URL is provided, the content will be fetched automatically. " +
+            "The Mermaid.js diagram definition. " +
             "Example: 'graph TD; A-->B; B-->C;'",
         },
         lightbox:
@@ -286,15 +253,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) =>
       };
     }
 
-    // Fetch content if it's a URL
-    if (isUrl(inputContent))
-    {
-      content = await fetchContent(inputContent);
-    }
-    else
-    {
-      content = inputContent;
-    }
+    content = inputContent;
 
     switch (name)
     {

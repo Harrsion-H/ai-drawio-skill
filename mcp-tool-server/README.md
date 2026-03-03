@@ -12,7 +12,6 @@ This package is part of the [drawio-mcp](https://github.com/jgraph/drawio-mcp) r
 - **Open XML diagrams**: Load native draw.io/mxGraph XML format
 - **Import CSV data**: Convert tabular data to diagrams (org charts, flowcharts, etc.)
 - **Render Mermaid.js**: Transform Mermaid syntax into editable draw.io diagrams
-- **URL support**: Fetch content from URLs automatically
 - **Customizable display**: Lightbox mode, dark mode, and more
 
 ## Installation
@@ -75,7 +74,7 @@ Opens the draw.io editor with XML content.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `content` | string | Yes | Draw.io XML or URL to XML |
+| `content` | string | Yes | Draw.io XML content |
 | `lightbox` | boolean | No | Read-only view mode (default: false) |
 | `dark` | string | No | "auto", "true", or "false" (default: "auto") |
 
@@ -85,7 +84,7 @@ Opens the draw.io editor with CSV data converted to a diagram.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `content` | string | Yes | CSV content or URL to CSV |
+| `content` | string | Yes | CSV content |
 | `lightbox` | boolean | No | Read-only view mode (default: false) |
 | `dark` | string | No | "auto", "true", or "false" (default: "auto") |
 
@@ -95,7 +94,7 @@ Opens the draw.io editor with a Mermaid.js diagram.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `content` | string | Yes | Mermaid syntax or URL |
+| `content` | string | Yes | Mermaid.js syntax |
 | `lightbox` | boolean | No | Read-only view mode (default: false) |
 | `dark` | string | No | "auto", "true", or "false" (default: "auto") |
 

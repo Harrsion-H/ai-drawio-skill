@@ -26,7 +26,7 @@ Each subdirectory has its own `CLAUDE.md` with implementation details.
 Opens the draw.io editor with XML content.
 
 **Parameters:**
-- `content` (required): Draw.io XML content or URL to XML file
+- `content` (required): Draw.io XML content
 - `lightbox` (optional): Open in read-only lightbox mode (default: false)
 - `dark` (optional): Dark mode - "true" or "false" (default: false)
 
@@ -50,7 +50,7 @@ Opens the draw.io editor with CSV data that gets converted to a diagram.
 **⚠️ Note:** CSV relies on draw.io's server-side processing and may occasionally fail or be unavailable. Consider using Mermaid for org charts when possible.
 
 **Parameters:**
-- `content` (required): CSV content or URL to CSV file
+- `content` (required): CSV content
 - `lightbox` (optional): Open in read-only lightbox mode (default: false)
 - `dark` (optional): Dark mode - "true" or "false" (default: false)
 
@@ -61,7 +61,7 @@ Opens the draw.io editor with CSV data that gets converted to a diagram.
 Opens the draw.io editor with a Mermaid.js diagram definition.
 
 **Parameters:**
-- `content` (required): Mermaid.js syntax or URL to Mermaid file
+- `content` (required): Mermaid.js syntax
 - `lightbox` (optional): Open in read-only lightbox mode (default: false)
 - `dark` (optional): Dark mode - "true" or "false" (default: false)
 
@@ -81,8 +81,7 @@ Opens the draw.io editor with a Mermaid.js diagram definition.
 2. **Use XML for precision**: When you need exact positioning, custom colors, or complex layouts
 3. **Avoid CSV for critical diagrams**: CSV processing can fail; prefer Mermaid for org charts when possible
 4. **Validate syntax**: Ensure Mermaid/CSV/XML syntax is correct before sending
-5. **Use URLs for large content**: For very large diagrams, consider hosting the content and passing a URL
-6. **Return the URL to users**: Always provide the generated URL so users can open the diagram in their browser
+5. **Return the URL to users**: Always provide the generated URL so users can open the diagram in their browser
 
 ## CRITICAL: XML Well-Formedness
 
