@@ -5,6 +5,7 @@ The official [draw.io](https://www.draw.io) MCP server that opens diagrams direc
 This package is part of the [drawio-mcp](https://github.com/jgraph/drawio-mcp) repository, which also includes:
 
 - **[MCP App Server](https://github.com/jgraph/drawio-mcp/tree/main/mcp-app-server)** — Renders diagrams inline in AI chat interfaces. Hosted at `https://mcp.draw.io/mcp` — no install required.
+- **[Skill + CLI](https://github.com/jgraph/drawio-mcp/tree/main/skill-cli)** — Claude Code skill that generates native `.drawio` files with optional PNG/SVG/PDF export.
 - **[Project Instructions](https://github.com/jgraph/drawio-mcp/tree/main/project-instructions)** — Zero-install approach using Claude Project instructions.
 
 ## Features
@@ -119,5 +120,5 @@ Opens the draw.io editor with a Mermaid.js diagram.
 
 - [draw.io](https://www.draw.io) - Free online diagram editor
 - [draw.io Desktop](https://github.com/jgraph/drawio-desktop) - Desktop application
-- [drawio-mcp on GitHub](https://github.com/jgraph/drawio-mcp) - Full repository with all three approaches
+- [drawio-mcp on GitHub](https://github.com/jgraph/drawio-mcp) - Full repository with all four approaches
 - [MCP Specification](https://modelcontextprotocol.io/)
