@@ -32,7 +32,8 @@ const html = buildHtml(appWithDepsJs, pakoDeflateJs);
 async function startStreamableHTTPServer()
 {
   const port = parseInt(process.env.PORT ?? "3001", 10);
-  const app = createMcpExpressApp();
+  const host = process.env.LISTEN ?? "127.0.0.1";
+  const app = createMcpExpressApp({ host: host });
 
   app.all("/mcp", async function(req, res)
   {
@@ -71,7 +72,7 @@ async function startStreamableHTTPServer()
 
   const httpServer = app.listen(port, function()
   {
-    console.log(`MCP App server listening on http://localhost:${port}/mcp`);
+    console.log(`MCP App server listening on http://${host}:${port}/mcp`);
   });
 
   const shutdown = function()
