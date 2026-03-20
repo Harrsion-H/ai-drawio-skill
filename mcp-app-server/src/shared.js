@@ -336,6 +336,10 @@ export function createServer(html, serverOptions = {})
         "(3) any shape can be a container by adding container=1 to its style, but also add pointerEvents=0 unless the container itself needs to be connectable. " +
         "Always use pointerEvents=0 on container styles that should not capture connections being rewired between children. " +
         "LAYOUT: Align nodes to a grid (multiples of 10). Use consistent spacing (e.g., 200px horizontal, 120px vertical between nodes). " +
+        "DARK MODE COLORS: To enable dark mode color adaptation, the mxGraphModel element must include adaptiveColors=\"auto\". " +
+        "strokeColor, fillColor, and fontColor default to 'default', which renders as black in light theme and white in dark theme. " +
+        "Explicit colors (e.g. fillColor=#DAE8FC) specify the light-mode color; the dark-mode color is computed automatically by inverting RGB values and rotating the hue 180 degrees. " +
+        "To specify both colors explicitly, use light-dark(lightColor,darkColor) in the style string, e.g. fontColor=light-dark(#7EA6E0,#FF0000). " +
         "See https://www.drawio.com/doc/faq/drawio-style-reference.html for the complete style reference.",
       inputSchema:
       {

@@ -90,7 +90,7 @@ A `.drawio` file is native mxGraphModel XML. Always generate XML directly — Me
 Every diagram must have this structure:
 
 ```xml
-<mxGraphModel>
+<mxGraphModel adaptiveColors="auto">
   <root>
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>
@@ -125,6 +125,18 @@ See `references/xml-reference.md` for full edge routing and container guidance.
 ## Containers and groups
 
 Use parent-child containment (`parent="containerId"`) for nested elements — do **not** just stack shapes. Children use **relative coordinates** within the container. See `references/xml-reference.md` for container types, rules, and examples.
+
+## Dark mode colors
+
+draw.io supports automatic dark mode rendering. How colors behave depends on the property:
+
+- **`strokeColor`, `fillColor`, `fontColor`** default to `"default"`, which renders as black in light theme and white in dark theme. When no explicit color is set, colors adapt automatically.
+- **Explicit colors** (e.g. `fillColor=#DAE8FC`) specify the light-mode color. The dark-mode color is computed automatically by inverting the RGB values (blending toward the inverse at 93%) and rotating the hue by 180° (via `mxUtils.getInverseColor`).
+- **`light-dark()` function** — To specify both colors explicitly, use `light-dark(lightColor,darkColor)` in the style string, e.g. `fontColor=light-dark(#7EA6E0,#FF0000)`. The first argument is used in light mode, the second in dark mode.
+
+To enable dark mode color adaptation, the `mxGraphModel` element must include `adaptiveColors="auto"`.
+
+When generating diagrams, you generally do not need to specify dark-mode colors — the automatic inversion handles most cases. Use `light-dark()` only when the automatic inverse color is unsatisfactory.
 
 ## Style reference
 

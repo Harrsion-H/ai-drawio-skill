@@ -31,6 +31,18 @@ The skill tries `drawio` first, then falls back to the platform-specific path.
 
 A `.drawio` file is native mxGraphModel XML. Mermaid and CSV formats require draw.io's server-side conversion and cannot be saved as native files. The skill generates XML directly for all diagram types.
 
+## Dark Mode Colors
+
+draw.io supports automatic dark mode rendering. How colors behave depends on the property:
+
+- **`strokeColor`, `fillColor`, `fontColor`** default to `"default"`, which renders as black in light theme and white in dark theme. When no explicit color is set, colors adapt automatically.
+- **Explicit colors** (e.g. `fillColor=#DAE8FC`) specify the light-mode color. The dark-mode color is computed automatically by inverting the RGB values (blending toward the inverse at 93%) and rotating the hue by 180° (via `mxUtils.getInverseColor`).
+- **`light-dark()` function** — To specify both colors explicitly, use `light-dark(lightColor,darkColor)` in the style string, e.g. `fontColor=light-dark(#7EA6E0,#FF0000)`. The first argument is used in light mode, the second in dark mode.
+
+To enable dark mode color adaptation, the `mxGraphModel` element must include `adaptiveColors="auto"`.
+
+When generating diagrams, you generally do not need to specify dark-mode colors — the automatic inversion handles most cases. Use `light-dark()` only when the automatic inverse color is unsatisfactory.
+
 ## Coding Conventions
 
 - **Allman brace style**: Opening braces go on their own line for all control structures, functions, objects, and callbacks.
