@@ -644,7 +644,6 @@ export function createServer(html, options = {})
       var normalizedXml = normalizeDiagramXml(xml) || xml;
 
       return {
-        structuredContent: { type: "diagram", format: "drawio-xml" },
         content: [{ type: "text", text: normalizedXml }],
       };
     }
