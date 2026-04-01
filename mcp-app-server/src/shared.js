@@ -14,10 +14,13 @@ import { normalizeDiagramXml, INVALID_DIAGRAM_XML_MESSAGE } from "./normalize-di
  *
  * @param {string} appWithDepsJs - The processed MCP Apps SDK bundle (exports stripped, App alias added).
  * @param {string} pakoDeflateJs - The pako deflate browser bundle.
+ * @param {object} [options] - Optional configuration.
+ * @param {string} [options.viewerJs] - If provided, inlines this JS instead of loading viewer-static.min.js from CDN.
  * @returns {string} Self-contained HTML string.
  */
-export function buildHtml(appWithDepsJs, pakoDeflateJs)
+export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
 {
+  var viewerJs = (options && options.viewerJs) || null;
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -101,8 +104,11 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs)
       <button id="fullscreen-btn">Fullscreen</button>
     </div>
 
-    <!-- draw.io viewer from CDN (async) -->
-    <script src="https://viewer.diagrams.net/js/viewer-static.min.js" async></script>
+    <!-- draw.io viewer -->
+    ${viewerJs
+      ? '<script>' + viewerJs + '<\/script>'
+      : '<script src="https://viewer.diagrams.net/js/viewer-static.min.js" async><\/script>'
+    }
 
     <!-- pako deflate (inlined, for #create URL generation) -->
     <script>${pakoDeflateJs}</script>
@@ -111,6 +117,92 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs)
     <script>
 ${appWithDepsJs}
 ${normalizeDiagramXml.toString()}
+
+// --- XML healing for partial/streaming XML ---
+
+/**
+ * Heals a truncated XML string so it can be parsed. Removes incomplete
+ * tags at the end and closes any open container tags.
+ *
+ * @param {string} partialXml - Potentially truncated XML string.
+ * @returns {string|null} - Valid XML string, or null if too incomplete.
+ */
+function healPartialXml(partialXml)
+{
+  if (partialXml == null || typeof partialXml !== 'string')
+  {
+    return null;
+  }
+
+  // Must have at least <mxGraphModel and <root to be useful
+  if (partialXml.indexOf('<root') === -1)
+  {
+    return null;
+  }
+
+  // Truncate at the last complete '>' to remove any half-written tag
+  var lastClose = partialXml.lastIndexOf('>');
+
+  if (lastClose === -1)
+  {
+    return null;
+  }
+
+  var xml = partialXml.substring(0, lastClose + 1);
+
+  // Strip XML comments to avoid confusing the tag scanner.
+  // Comments may span multiple lines and contain '<' or '>'.
+  // Also remove any incomplete comment at the end (opened but not closed).
+  var stripped = xml.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--[\s\S]*$/, '');
+
+  // Track open tags using a simple stack-based approach.
+  // We scan for opening and closing tags, ignoring self-closing ones.
+  var tagStack = [];
+  var tagRegex = /<(\/?[a-zA-Z][a-zA-Z0-9]*)[^>]*?(\/?)>/g;
+  var match;
+
+  while ((match = tagRegex.exec(stripped)) !== null)
+  {
+    var nameOrClose = match[1];
+    var selfClose = match[2];
+
+    // Skip processing instructions (<?xml ...?>)
+    if (match[0].charAt(1) === '?')
+    {
+      continue;
+    }
+
+    if (selfClose === '/')
+    {
+      // Self-closing tag, ignore
+      continue;
+    }
+
+    if (nameOrClose.charAt(0) === '/')
+    {
+      // Closing tag - pop from stack if matching
+      var closeName = nameOrClose.substring(1);
+
+      if (tagStack.length > 0 && tagStack[tagStack.length - 1] === closeName)
+      {
+        tagStack.pop();
+      }
+    }
+    else
+    {
+      // Opening tag
+      tagStack.push(nameOrClose);
+    }
+  }
+
+  // Close all remaining open tags in reverse order
+  for (var i = tagStack.length - 1; i >= 0; i--)
+  {
+    xml += '</' + tagStack[i] + '>';
+  }
+
+  return xml;
+}
 
 // --- Client-side app logic ---
 
@@ -124,6 +216,10 @@ const copyXmlBtn     = document.getElementById("copy-xml-btn");
 var drawioEditUrl = null;
 var currentXml = null;
 var invalidDiagramXmlMessage = ${JSON.stringify(INVALID_DIAGRAM_XML_MESSAGE)};
+
+// --- Streaming state ---
+var graphViewer = null;
+var streamingInitialized = false;
 
 var app = new App({ name: "draw.io Diagram Viewer", version: "1.0.0" });
 
@@ -206,8 +302,27 @@ async function renderDiagram(xml)
 
   var bg = getComputedStyle(document.body).backgroundColor;
   GraphViewer.darkBackgroundColor = bg;
-  GraphViewer.processElements();
 
+  // Use createViewerForElement with callback to capture the viewer instance
+  var graphDiv2 = containerEl.querySelector('.mxgraph');
+
+  if (graphDiv2 != null)
+  {
+    GraphViewer.createViewerForElement(graphDiv2, function(viewer)
+    {
+      graphViewer = viewer;
+      notifySize();
+    });
+  }
+  else
+  {
+    GraphViewer.processElements();
+    notifySize();
+  }
+}
+
+function notifySize()
+{
   // GraphViewer renders asynchronously; nudge the SDK's ResizeObserver
   // by explicitly sending size after the SVG is in the DOM.
   requestAnimationFrame(function()
@@ -223,6 +338,127 @@ async function renderDiagram(xml)
   });
 }
 
+// --- Streaming: incremental rendering as the LLM generates XML ---
+
+app.ontoolinputpartial = function(params)
+{
+  var partialXml = params.arguments && params.arguments.xml;
+
+  if (partialXml == null || typeof partialXml !== 'string')
+  {
+    return;
+  }
+
+  var healedXml = healPartialXml(partialXml);
+
+  if (healedXml == null)
+  {
+    return;
+  }
+
+  // Update loading text during streaming
+  if (loadingEl.style.display !== 'none')
+  {
+    loadingEl.querySelector('.spinner') && (loadingEl.innerHTML =
+      '<div class="spinner"></div>Streaming diagram...');
+  }
+
+  if (typeof GraphViewer === 'undefined')
+  {
+    // Viewer not loaded yet, skip this partial update
+    return;
+  }
+
+  try
+  {
+    var xmlDoc = mxUtils.parseXml(healedXml);
+    var xmlNode = xmlDoc.documentElement;
+
+    if (!streamingInitialized)
+    {
+      // First usable partial: do initial render
+      streamingInitialized = true;
+      containerEl.innerHTML = "";
+
+      var graphDiv = document.createElement("div");
+      containerEl.appendChild(graphDiv);
+
+      loadingEl.style.display = "none";
+      containerEl.style.display = "block";
+
+      var bg = getComputedStyle(document.body).backgroundColor;
+      GraphViewer.darkBackgroundColor = bg;
+
+      var config = {
+        highlight: "#0000ff",
+        "dark-mode": "auto",
+        nav: true,
+        resize: true,
+        toolbar: "zoom layers tags",
+      };
+
+      graphViewer = new GraphViewer(graphDiv, xmlNode, config);
+      notifySize();
+    }
+    else if (graphViewer != null)
+    {
+      // Subsequent partials: merge delta
+      graphViewer.mergeXmlDelta(xmlNode);
+      notifySize();
+    }
+  }
+  catch (e)
+  {
+    // Ignore parse errors from partial XML - next partial may fix it
+    if (typeof console !== 'undefined')
+    {
+      console.debug('Partial XML parse/merge error:', e.message);
+    }
+  }
+};
+
+app.ontoolinput = function(params)
+{
+  var xml = params.arguments && params.arguments.xml;
+
+  if (xml == null || typeof xml !== 'string')
+  {
+    return;
+  }
+
+  if (typeof GraphViewer === 'undefined')
+  {
+    return;
+  }
+
+  try
+  {
+    if (graphViewer != null)
+    {
+      // Final complete input: do a full setXmlNode to ensure accuracy
+      var xmlDoc = mxUtils.parseXml(xml);
+      graphViewer.pendingEdges = null;
+      graphViewer.setXmlNode(xmlDoc.documentElement);
+      currentXml = xml;
+      drawioEditUrl = generateDrawioEditUrl(xml);
+      toolbarEl.style.display = "flex";
+      notifySize();
+    }
+    else
+    {
+      // No streaming happened, render normally
+      renderDiagram(xml);
+    }
+  }
+  catch (e)
+  {
+    if (typeof console !== 'undefined')
+    {
+      console.error('Final input render error:', e.message);
+    }
+  }
+};
+
 app.ontoolresult = function(result)
 {
   var textBlock = result.content && result.content.find(function(c) { return c.type === "text"; });
@@ -233,7 +469,29 @@ app.ontoolresult = function(result)
 
     if (normalizedXml)
     {
-      renderDiagram(normalizedXml);
+      if (graphViewer != null)
+      {
+        // Final authoritative render from server
+        try
+        {
+          var xmlDoc = mxUtils.parseXml(normalizedXml);
+          graphViewer.pendingEdges = null;
+          graphViewer.setXmlNode(xmlDoc.documentElement);
+          currentXml = normalizedXml;
+          drawioEditUrl = generateDrawioEditUrl(normalizedXml);
+          toolbarEl.style.display = "flex";
+          notifySize();
+        }
+        catch (e)
+        {
+          // Fallback to full re-render
+          renderDiagram(normalizedXml);
+        }
+      }
+      else
+      {
+        renderDiagram(normalizedXml);
+      }
     }
     else
     {
