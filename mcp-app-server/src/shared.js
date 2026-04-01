@@ -481,13 +481,13 @@ async function renderDiagram(xml)
           playViewerIntroAnimation(viewer.graph);
         }
 
-        notifySize();
+        notifySize('viewer-callback');
       });
     }
     else
     {
       GraphViewer.processElements();
-      notifySize();
+      notifySize('processElements');
     }
   }
   catch (e)
@@ -496,7 +496,7 @@ async function renderDiagram(xml)
   }
 }
 
-function notifySize()
+function notifySize(tag)
 {
   // GraphViewer renders asynchronously; nudge the SDK's ResizeObserver
   // by explicitly sending size after the SVG is in the DOM.
@@ -505,6 +505,11 @@ function notifySize()
     var el = document.documentElement;
     var w = Math.ceil(el.scrollWidth);
     var h = Math.ceil(el.scrollHeight);
+    var containerH = containerEl.clientHeight;
+    var containerStyle = containerEl.style.height;
+    var containerDisplay = containerEl.style.display;
+    var svgEl = containerEl.querySelector('svg');
+    var svgH = svgEl ? svgEl.getBoundingClientRect().height : 0;
 
     if (app.sendSizeChanged)
     {
@@ -1122,6 +1127,7 @@ function endStreaming()
   }
 
   streamPendingEdges = null;
+  var prevH = containerEl.clientHeight;
   containerEl.classList.remove("streaming");
   containerEl.style.height = '';
   streamingInitialized = false;
