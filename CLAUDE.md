@@ -194,7 +194,7 @@ For the XML Schema Definition (XSD) for validating `.drawio` files: https://www.
 ## CRITICAL: XML Well-Formedness
 
 When generating draw.io XML, the output **must** be well-formed XML:
-- **NEVER use double hyphens (`--`) inside XML comments.** `--` is illegal inside `<!-- -->` per the XML spec and causes parse errors. Use single hyphens or rephrase (e.g. `<!-- Order 1 to OrderItem -->` not `<!-- Order 1 --- OrderItem -->`).
+- **NEVER include ANY XML comments (`<!-- -->`) in the output.** XML comments are strictly forbidden — they waste tokens, can cause parse errors, and serve no purpose in diagram XML.
 - Escape special characters in attribute values (`&amp;`, `&lt;`, `&gt;`, `&quot;`).
 
 ## Coding Conventions
@@ -221,7 +221,7 @@ function example()
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| "Double hyphen within comment" | `--` used inside XML comments | Remove double hyphens from comments; use words or single hyphens |
+| XML comments in output | `<!-- -->` comments found in generated XML | Remove all XML comments — they are strictly forbidden |
 | "URI malformed" | Special characters in CSV style attributes | Use hardcoded colors instead of `%column%` placeholders |
 | "Service nicht verfügbar" | draw.io CSV server unavailable | Retry later or use Mermaid instead |
 | Blank diagram | Invalid Mermaid/XML syntax | Check syntax, ensure proper escaping |

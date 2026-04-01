@@ -1423,7 +1423,7 @@ export function createServer(html, options = {})
       title: "Create Diagram",
       description:
         "Creates and displays an interactive draw.io diagram. Pass draw.io XML (mxGraphModel format) to render it inline. " +
-        "IMPORTANT: The XML must be well-formed. Do NOT use double hyphens (--) inside XML comments, as this is invalid XML and will break the parser. Use single hyphens or rephrase instead (e.g. <!-- Order 1 to OrderItem --> not <!-- Order 1 --- OrderItem -->). " +
+        "IMPORTANT: The XML must be well-formed. Do NOT include ANY XML comments (<!-- -->) in the output — they are strictly forbidden. " +
         "EDGE GEOMETRY: Every edge mxCell MUST contain a <mxGeometry relative=\"1\" as=\"geometry\" /> child element, even when there are no waypoints. Self-closing edge cells (<mxCell ... edge=\"1\" ... />) are invalid and will not render correctly. " +
         "EDGE ROUTING: Use edgeStyle=orthogonalEdgeStyle for right-angle connectors. " +
         "Space nodes at least 60px apart to avoid overlapping edges. " +
@@ -1447,7 +1447,7 @@ export function createServer(html, options = {})
         xml: z
           .string()
           .describe(
-            "The draw.io XML content in mxGraphModel format to render as a diagram. Must be well-formed XML: no double hyphens (--) inside comments, no unescaped special characters in attribute values."
+            "The draw.io XML content in mxGraphModel format to render as a diagram. Must be well-formed XML: no XML comments (<!-- -->), no unescaped special characters in attribute values."
           ),
       },
       annotations:

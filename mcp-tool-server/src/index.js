@@ -122,7 +122,7 @@ const tools =
       "Opens the draw.io editor with a diagram from XML content. " +
       "Use this to view, edit, or create diagrams in draw.io format. " +
       "The XML should be valid draw.io/mxGraph XML format. " +
-      "IMPORTANT: Do NOT use double hyphens (--) inside XML comments, as this is invalid XML and will break the parser. Use single hyphens or rephrase instead. " +
+      "IMPORTANT: Do NOT include ANY XML comments (<!-- -->) in the output — they are strictly forbidden. " +
       "EDGE GEOMETRY: Every edge mxCell MUST contain a <mxGeometry relative=\"1\" as=\"geometry\" /> child element, even when there are no waypoints. Self-closing edge cells (<mxCell ... edge=\"1\" ... />) are invalid and will not render correctly. " +
       "EDGE ROUTING: Use edgeStyle=orthogonalEdgeStyle for right-angle connectors. " +
       "Space nodes at least 60px apart to avoid overlapping edges. " +

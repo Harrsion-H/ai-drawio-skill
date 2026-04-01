@@ -225,7 +225,7 @@ CFO,CEO
 ## CRITICAL: XML Well-Formedness
 
 When generating draw.io XML, the output **must** be well-formed XML. In particular:
-- **NEVER use double hyphens (`--`) inside XML comments.** `--` is illegal inside `<!-- -->` per the XML spec and will cause a parse error. Use single hyphens or rephrase (e.g. `<!-- Order 1 to OrderItem -->` not `<!-- Order 1 --- OrderItem -->`).
+- **NEVER include ANY XML comments (`<!-- -->`) in the output.** XML comments are strictly forbidden — they waste tokens, can cause parse errors, and serve no purpose in diagram XML.
 - Escape special characters in attribute values (`&amp;`, `&lt;`, `&gt;`, `&quot;`).
 
 ## CRITICAL: URL Output Rules
