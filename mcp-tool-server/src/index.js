@@ -5,6 +5,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import pako from "pako";
 import { spawn } from "child_process";
+import { writeFileSync, unlinkSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 const DRAWIO_BASE_URL = "https://app.diagrams.net/";
 
@@ -17,7 +20,18 @@ function openBrowser(url)
 
   if (process.platform === "win32")
   {
-    child = spawn("cmd", ["/c", "start", "", url], { shell: false, stdio: "ignore" });
+    // cmd.exe's "start" command treats & as a command separator and
+    // drops everything after # in URLs, so the #create=... fragment
+    // (which carries the entire diagram payload) is silently lost.
+    // Writing a temporary .url file preserves the full URL intact.
+    const tmpFile = join(tmpdir(), "drawio-mcp-" + Date.now() + ".url");
+    writeFileSync(tmpFile, "[InternetShortcut]\r\nURL=" + url + "\r\n");
+    child = spawn("cmd", ["/c", "start", "", tmpFile], { shell: false, stdio: "ignore" });
+
+    setTimeout(function()
+    {
+      try { unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+    }, 10000);
   }
   else if (process.platform === "darwin")
   {
