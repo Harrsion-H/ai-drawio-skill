@@ -63,7 +63,6 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
       }
       #diagram-container.streaming {
         min-height: 400px;
-        max-height: 800px;
         overflow: hidden;
         position: relative;
       }
@@ -1022,13 +1021,14 @@ function streamFollowNewCells(graph)
 
   if (cw <= 0 || ch <= 0) return;
 
-  // Scale to fit, clamped to [0.15, 1.0]
-  var targetScale = Math.min((cw - padding * 2) / Math.max(uw, 1), (ch - padding * 2) / Math.max(uh, 1), 1);
-  targetScale = Math.max(targetScale, 0.15);
+  // Scale to fit width, clamped to [0.6, 1.0]
+  var fitScaleW = (cw - padding * 2) / Math.max(uw, 1);
+  var targetScale = Math.min(fitScaleW, 1);
+  targetScale = Math.max(targetScale, 0.6);
 
-  // Dynamically grow the streaming container to fit the diagram
+  // Dynamically grow the streaming container to fit the diagram at this scale
   var neededH = Math.ceil(uh * targetScale + padding * 2);
-  var streamH = Math.max(400, Math.min(800, neededH));
+  var streamH = Math.max(400, neededH);
 
   if (ch < streamH)
   {
@@ -1039,10 +1039,6 @@ function streamFollowNewCells(graph)
     {
       app.sendSizeChanged({ width: cw, height: streamH });
     }
-
-    // Recompute scale with the new container height
-    targetScale = Math.min((cw - padding * 2) / Math.max(uw, 1), (ch - padding * 2) / Math.max(uh, 1), 1);
-    targetScale = Math.max(targetScale, 0.15);
   }
 
   // Translate to show the "active" part of the diagram:
@@ -1127,7 +1123,9 @@ function endStreaming()
 
   streamPendingEdges = null;
   containerEl.classList.remove("streaming");
+  containerEl.style.height = '';
   streamingInitialized = false;
+
 }
 
 // --- Streaming: incremental rendering as the LLM generates XML ---
