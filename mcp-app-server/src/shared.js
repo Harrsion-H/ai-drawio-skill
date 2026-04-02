@@ -36,6 +36,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
 
       body {
         font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+        overflow: hidden;
       }
 
       #loading {
