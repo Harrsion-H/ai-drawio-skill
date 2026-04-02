@@ -1873,7 +1873,8 @@ export function createServer(html, options = {})
           "P&ID, electrical, Cisco, Kubernetes, BPMN). Do NOT use for standard diagram " +
           "types like flowcharts, UML, ERD, org charts, or mind maps — these use basic " +
           "geometric shapes (rectangles, diamonds, circles, cylinders) that are already " +
-          "covered in the XML reference. The style string from the results can be " +
+          "covered in the XML reference. Also skip if the user asks to use basic/simple " +
+          "shapes or says not to search. The style string from the results can be " +
           "used directly in mxCell style attributes.",
         inputSchema:
         {
