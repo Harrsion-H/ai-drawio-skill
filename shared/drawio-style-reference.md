@@ -1,6 +1,6 @@
 # draw.io Style Reference for AI File Generation
 
-This document is a companion to [`mxfile.xsd`](https://www.drawio.com/assets/mxfile.xsd) and provides all information
+This document is a companion to [`mxfile.xsd`](https://github.com/jgraph/drawio-mcp/blob/main/shared/mxfile.xsd) and provides all information
 needed to programmatically generate valid draw.io (.drawio) files. All data
 was extracted from the draw.io source code.
 
