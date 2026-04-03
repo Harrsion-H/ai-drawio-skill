@@ -1396,6 +1396,148 @@ export function processAppBundle(raw)
   return raw.slice(0, exportMatch.index) + `\nvar App = ${appEntry.local};\n`;
 }
 
+// ── Diagram validation ───────────────────────────────────────────────────────
+
+/**
+ * Validate draw.io XML and return errors/warnings.
+ * Uses regex-based extraction — no XML parser needed.
+ *
+ * @param {string} xml - Raw draw.io XML string.
+ * @returns {{errors: string[], warnings: string[]}}
+ */
+function validateDiagramXml(xml)
+{
+  var errors = [];
+  var warnings = [];
+
+  // 1. XML comments
+  if (xml.indexOf("<!--") >= 0)
+  {
+    errors.push("XML comments (<!-- -->) are forbidden — remove all comments");
+  }
+
+  // 2. Collect all IDs and cell metadata via regex
+  //    Match both <mxCell ...> and <mxCell .../> and <object ...>/<UserObject ...>
+  var allIds = new Set();
+  var duplicateIds = [];
+  var cells = []; // {id, edge, vertex, source, target, parent, selfClosing, hasGeometryChild, line}
+
+  // Extract id attributes from all elements (mxCell, object, UserObject)
+  var idRegex = /\bid="([^"]*)"/g;
+  var idMatch;
+
+  while ((idMatch = idRegex.exec(xml)) !== null)
+  {
+    var id = idMatch[1];
+
+    if (allIds.has(id))
+    {
+      duplicateIds.push(id);
+    }
+    else
+    {
+      allIds.add(id);
+    }
+  }
+
+  if (duplicateIds.length > 0)
+  {
+    errors.push("Duplicate IDs: " + duplicateIds.join(", "));
+  }
+
+  // 3. Check structural cells
+  if (!allIds.has("0"))
+  {
+    errors.push("Missing root cell with id=\"0\" — every diagram needs <mxCell id=\"0\"/>");
+  }
+
+  if (!allIds.has("1"))
+  {
+    errors.push("Missing default layer cell with id=\"1\" parent=\"0\" — every diagram needs <mxCell id=\"1\" parent=\"0\"/>");
+  }
+
+  // 4. Parse mxCell elements for detailed checks
+  //    We split the XML by <mxCell to process each cell block
+  var cellBlocks = xml.split(/<mxCell\s/);
+
+  for (var i = 1; i < cellBlocks.length; i++)
+  {
+    var block = cellBlocks[i];
+
+    // Find the end of the opening tag
+    var tagEnd = block.indexOf(">");
+
+    if (tagEnd < 0)
+    {
+      continue;
+    }
+
+    var tagContent = block.substring(0, tagEnd);
+    var isSelfClosing = tagContent.charAt(tagContent.length - 1) === "/";
+
+    // Extract attributes
+    var attrs = {};
+    var attrRegex = /(\w+)="([^"]*)"/g;
+    var m;
+
+    while ((m = attrRegex.exec(tagContent)) !== null)
+    {
+      attrs[m[1]] = m[2];
+    }
+
+    var isEdge = attrs.edge === "1";
+    var isVertex = attrs.vertex === "1";
+
+    // 5. Self-closing edge cells (missing mxGeometry)
+    if (isEdge && isSelfClosing)
+    {
+      errors.push("Edge id=\"" + (attrs.id || "?") + "\" is self-closing — every edge must contain <mxGeometry relative=\"1\" as=\"geometry\"/> as a child element");
+    }
+
+    // 6. Edge without mxGeometry child (non-self-closing but still missing it)
+    if (isEdge && !isSelfClosing)
+    {
+      // Check if the block between > and </mxCell> contains mxGeometry
+      var closingIdx = block.indexOf("</mxCell>");
+
+      if (closingIdx > tagEnd)
+      {
+        var body = block.substring(tagEnd + 1, closingIdx);
+
+        if (body.indexOf("mxGeometry") < 0)
+        {
+          errors.push("Edge id=\"" + (attrs.id || "?") + "\" has no <mxGeometry> child — edges must contain <mxGeometry relative=\"1\" as=\"geometry\"/>");
+        }
+      }
+    }
+
+    // 7. Dangling source/target references
+    if (attrs.source && !allIds.has(attrs.source))
+    {
+      warnings.push("Edge id=\"" + (attrs.id || "?") + "\" references source=\"" + attrs.source + "\" which does not exist");
+    }
+
+    if (attrs.target && !allIds.has(attrs.target))
+    {
+      warnings.push("Edge id=\"" + (attrs.id || "?") + "\" references target=\"" + attrs.target + "\" which does not exist");
+    }
+
+    // 8. Dangling parent references (skip "0" and "1" which are structural)
+    if (attrs.parent && attrs.parent !== "0" && !allIds.has(attrs.parent))
+    {
+      warnings.push("Cell id=\"" + (attrs.id || "?") + "\" references parent=\"" + attrs.parent + "\" which does not exist");
+    }
+
+    // 9. Cell with source/target but missing edge="1"
+    if ((attrs.source || attrs.target) && !isEdge)
+    {
+      warnings.push("Cell id=\"" + (attrs.id || "?") + "\" has source/target attributes but is missing edge=\"1\"");
+    }
+  }
+
+  return { errors: errors, warnings: warnings };
+}
+
 // ── Shape search ─────────────────────────────────────────────────────────────
 
 /**
@@ -1850,9 +1992,29 @@ export function createServer(html, options = {})
         };
       }
 
-      return {
-        content: [{ type: "text", text: normalizedXml }],
-      };
+      var content = [{ type: "text", text: normalizedXml }];
+
+      // Validate and append warnings/errors so the LLM can self-correct
+      var validation = validateDiagramXml(normalizedXml);
+
+      if (validation.errors.length > 0 || validation.warnings.length > 0)
+      {
+        var messages = [];
+
+        if (validation.errors.length > 0)
+        {
+          messages.push("ERRORS (will cause rendering issues):\n- " + validation.errors.join("\n- "));
+        }
+
+        if (validation.warnings.length > 0)
+        {
+          messages.push("WARNINGS (may cause issues):\n- " + validation.warnings.join("\n- "));
+        }
+
+        content.push({ type: "text", text: messages.join("\n\n") });
+      }
+
+      return { content: content };
     }
   );
 
