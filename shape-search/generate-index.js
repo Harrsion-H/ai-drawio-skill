@@ -17,26 +17,72 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { JSDOM } from "jsdom";
 
 var __dirname = path.dirname(fileURLToPath(import.meta.url));
-var DRAWIO_ROOT = path.resolve(
-  process.env.DRAWIO_DEV_PATH || path.join(__dirname, "..", "..", "drawio-dev"),
-  "src", "main", "webapp"
-);
+var DRAWIO_BASE_URL = "https://app.diagrams.net";
+var DRAWIO_ROOT = null;
+var useLocalFiles = false;
 
-var appMinPath = path.join(DRAWIO_ROOT, "js", "app.min.js");
-
-if (!fs.existsSync(appMinPath))
+if (process.env.DRAWIO_DEV_PATH)
 {
-  console.error("Cannot find app.min.js at: " + appMinPath);
-  console.error("Set DRAWIO_DEV_PATH to the drawio-dev repository root.");
-  process.exit(1);
+  DRAWIO_ROOT = path.resolve(process.env.DRAWIO_DEV_PATH, "src", "main", "webapp");
+
+  var appMinPath = path.join(DRAWIO_ROOT, "js", "app.min.js");
+
+  if (!fs.existsSync(appMinPath))
+  {
+    console.error("Cannot find app.min.js at: " + appMinPath);
+    console.error("Set DRAWIO_DEV_PATH to the drawio-dev repository root.");
+    process.exit(1);
+  }
+
+  useLocalFiles = true;
+  console.log("Loading app.min.js from: " + DRAWIO_ROOT);
+}
+else
+{
+  console.log("Loading app.min.js from: " + DRAWIO_BASE_URL + "/js/app.min.js");
 }
 
-console.log("Loading app.min.js from: " + DRAWIO_ROOT);
+/**
+ * Fetches a URL synchronously using curl. Returns the content as a string,
+ * or null if the request fails.
+ */
+function fetchSync(url)
+{
+  try
+  {
+    return execFileSync("curl", ["-sL", "--fail", url], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 30000
+    }).toString("utf8");
+  }
+  catch (e)
+  {
+    return null;
+  }
+}
 
-var appCode = fs.readFileSync(appMinPath, "utf8");
+var appCode;
+
+if (useLocalFiles)
+{
+  appCode = fs.readFileSync(path.join(DRAWIO_ROOT, "js", "app.min.js"), "utf8");
+}
+else
+{
+  appCode = fetchSync(DRAWIO_BASE_URL + "/js/app.min.js");
+
+  if (!appCode)
+  {
+    console.error("Failed to download app.min.js from " + DRAWIO_BASE_URL);
+    process.exit(1);
+  }
+
+  console.log("Downloaded app.min.js (" + (appCode.length / (1024 * 1024)).toFixed(1) + " MB)");
+}
 var capturedShapes = [];
 
 // ── Create jsdom with minimal stubs ──────────────────────────────────────────
@@ -49,7 +95,7 @@ var dom = new JSDOM(
     runScripts: "dangerously",
     beforeParse: function(window)
     {
-      // XMLHttpRequest that serves local stencil files
+      // XMLHttpRequest that serves files from local disk or the web
       window.XMLHttpRequest = function()
       {
         this.readyState = 0;
@@ -64,29 +110,59 @@ var dom = new JSDOM(
         {
           try
           {
-            var filePath = this._url;
+            var content = null;
+            var requestUrl = this._url;
 
-            if (filePath.startsWith("/"))
+            if (useLocalFiles)
             {
-              filePath = DRAWIO_ROOT + filePath;
+              var filePath = requestUrl;
+
+              if (filePath.startsWith("/"))
+              {
+                filePath = DRAWIO_ROOT + filePath;
+              }
+              else if (filePath.startsWith("http"))
+              {
+                this.status = 404;
+                this.readyState = 4;
+
+                if (this.onreadystatechange) this.onreadystatechange();
+
+                return;
+              }
+              else if (!filePath.match(/^[a-zA-Z]:/))
+              {
+                filePath = DRAWIO_ROOT + "/" + filePath;
+              }
+
+              if (fs.existsSync(filePath))
+              {
+                content = fs.readFileSync(filePath, "utf8");
+              }
             }
-            else if (filePath.startsWith("http"))
+            else
             {
-              this.status = 404;
-              this.readyState = 4;
+              var fullUrl;
 
-              if (this.onreadystatechange) this.onreadystatechange();
+              if (requestUrl.startsWith("http"))
+              {
+                fullUrl = requestUrl;
+              }
+              else if (requestUrl.startsWith("/"))
+              {
+                fullUrl = DRAWIO_BASE_URL + requestUrl;
+              }
+              else
+              {
+                fullUrl = DRAWIO_BASE_URL + "/" + requestUrl;
+              }
 
-              return;
+              content = fetchSync(fullUrl);
             }
-            else if (!filePath.match(/^[a-zA-Z]:/))
-            {
-              filePath = DRAWIO_ROOT + "/" + filePath;
-            }
 
-            if (fs.existsSync(filePath))
+            if (content != null)
             {
-              this.responseText = fs.readFileSync(filePath, "utf8");
+              this.responseText = content;
               this.status = 200;
               this.readyState = 4;
 
@@ -121,7 +197,7 @@ var dom = new JSDOM(
         overrideMimeType: function() {}
       };
 
-      window.mxBasePath = DRAWIO_ROOT + "/mxgraph/src";
+      window.mxBasePath = useLocalFiles ? DRAWIO_ROOT + "/mxgraph/src" : "/mxgraph/src";
       window.mxLoadResources = false;
       window.mxForceIncludes = false;
       window.mxLoadStylesheets = false;
@@ -222,9 +298,22 @@ var themes = {};
 
 try
 {
-  var defaultXml = fs.readFileSync(path.join(DRAWIO_ROOT, "styles", "default.xml"), "utf8");
-  var themeDoc = new w.DOMParser().parseFromString(defaultXml, "text/xml");
-  themes[w.Graph.prototype.defaultThemeName] = themeDoc.documentElement;
+  var defaultXml;
+
+  if (useLocalFiles)
+  {
+    defaultXml = fs.readFileSync(path.join(DRAWIO_ROOT, "styles", "default.xml"), "utf8");
+  }
+  else
+  {
+    defaultXml = fetchSync(DRAWIO_BASE_URL + "/styles/default.xml");
+  }
+
+  if (defaultXml)
+  {
+    var themeDoc = new w.DOMParser().parseFromString(defaultXml, "text/xml");
+    themes[w.Graph.prototype.defaultThemeName] = themeDoc.documentElement;
+  }
 }
 catch (e)
 {
