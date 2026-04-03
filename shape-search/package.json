@@ -2,13 +2,12 @@
   "name": "@drawio/shape-search-generator",
   "version": "1.0.0",
   "private": true,
-  "description": "Generates a shape search index from the draw.io client source code",
+  "description": "Generates a shape search index from the deployed draw.io client",
   "type": "module",
   "scripts": {
     "generate": "node generate-index.js"
   },
   "dependencies": {
-    "@xmldom/xmldom": "^0.9.8",
     "jsdom": "^26.1.0"
   }
 }
