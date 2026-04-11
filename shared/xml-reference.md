@@ -58,6 +58,7 @@ Detailed reference for styles, edge routing, containers, layers, tags, metadata,
 | `group` | style keyword | Invisible container (pointerEvents=0) |
 | `container=1` | 0 or 1 | Enable container behavior on any shape |
 | `pointerEvents=0` | 0 or 1 | Prevent container from capturing child connections |
+| `shape=umlLifeline;perimeter=lifelinePerimeter;size=16` | shape | UML sequence diagram lifeline (size = header height) |
 
 ## Edge routing
 
@@ -68,28 +69,53 @@ Detailed reference for styles, edge routing, containers, layers, tags, metadata,
 </mxCell>
 ```
 
-draw.io does **not** have built-in collision detection for edges. Plan layout and routing carefully:
+### Edge style selection
 
-- Use `edgeStyle=orthogonalEdgeStyle` for right-angle connectors (most common)
-- **Space nodes generously** — at least 60px apart, prefer 200px horizontal / 120px vertical gaps
-- Use `exitX`/`exitY` and `entryX`/`entryY` (values 0-1) to control which side of a node an edge connects to. Spread connections across different sides to prevent overlap
-- **Leave room for arrowheads**: The final straight segment of an edge (between the last bend and the target shape, or between the source shape and the first bend) must be long enough to fit the arrowhead. The default arrow size is 6px (configurable via `startSize`/`endSize` styles). If the final segment is too short, the arrowhead overlaps the bend and looks broken. Ensure at least 20px of straight segment before the target and after the source when placing waypoints or positioning nodes
-- When using `orthogonalEdgeStyle`, the auto-router places bends automatically — if source and target are close together or nearly aligned on one axis, the router may place a bend very close to a shape, leaving no room for the arrow. Fix this by either increasing node spacing or adding explicit waypoints that keep the final segment long enough
-- Add explicit **waypoints** when edges would overlap:
-  ```xml
-  <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="a" target="b">
-    <mxGeometry relative="1" as="geometry">
-      <Array as="points">
-        <mxPoint x="300" y="150"/>
-        <mxPoint x="300" y="250"/>
-      </Array>
-    </mxGeometry>
-  </mxCell>
-  ```
-- Use `rounded=1` on edges for cleaner bends
-- Use `jettySize=auto` for better port spacing on orthogonal edges
-- Align all nodes to a grid (multiples of 10)
-- **Edge labels**: Do NOT wrap edge labels in HTML markup to reduce font size. The default font size for edge labels is already 11px (vs 12px for vertices), so they are already smaller. Just set the `value` attribute directly.
+Choose the edge style that fits the connection:
+
+| Style | Syntax | Best for |
+|-------|--------|---------|
+| **Orthogonal** | `edgeStyle=orthogonalEdgeStyle` | Complex routing with 2+ bends — flowcharts, architecture, network diagrams |
+| **Elbow** | `edgeStyle=elbowEdgeStyle;elbow=vertical;` | Simple connections with 0–1 bends — linear flows, P&ID pipelines. The `elbow` value names the direction of the center segment if a bend is added: `vertical` means the straight segments run horizontally (use for horizontal connections); `horizontal` means the straight segments run vertically (use for vertical connections) |
+| **Entity Relation** | `edgeStyle=entityRelationEdgeStyle` | ER diagrams. Creates perpendicular stubs at both ends |
+| **Straight** | no `edgeStyle` | UML class/sequence diagrams, direct point-to-point connections. For sequence diagram messages use `endSize=6;startSize=6;` to keep arrowheads small |
+| **Curved** | `curved=1` | Mind maps, informal diagrams |
+
+**When to prefer elbow over orthogonal:** if a connection only needs 0–1 bends (e.g., a direct horizontal connection between two nodes at slightly different y positions), use `elbowEdgeStyle` — it produces a clean line without the right-angle kinks that `orthogonalEdgeStyle` creates when source and target are slightly misaligned. Reserve `orthogonalEdgeStyle` for routes that need 2+ bends to navigate around obstacles.
+
+**Use a consistent edge style within each diagram.** Pick one primary style based on diagram type and use it for ALL edges in that diagram. ER diagrams → all edges use `entityRelationEdgeStyle`. UML class → all edges straight. Mind maps → all edges curved. Flowcharts/architecture → all edges orthogonal or elbow (use elbow for 0–1 bend connections, orthogonal for 2+ bends). Never mix orthogonal with straight/unstyled edges — use elbow instead for the simpler connections.
+
+**The detailed routing rules below apply only to orthogonal/elbow edges.** For entity relation, straight, and curved edges, do NOT add waypoints or exit/entry overrides — let the edge connect directly between shapes. Only use node positioning to avoid overlaps.
+
+### Orthogonal edge routing
+
+The auto-router has NO obstacle avoidance. Follow these priorities:
+
+**P1 — Layout vertices first:** Grid-align all coordinates (multiples of 10). Space ≥60px apart, ≥80px when edges have labels. Align directly connected nodes on their shared axis so edges are perfectly straight (e.g., if a diamond's "No" connects right to a node, match their center y). Prioritize symmetry and consistency. Don't compromise layout for routing.
+
+**P2 — No edge segment through any non-source/target vertex:** Route around rows and columns of intermediate nodes — above/below for rows, left/right for columns. Loop-backs: use a 2-segment L-shape along the diagram perimeter. Cross-cutting edges (e.g., monitoring → multiple targets): route along the perimeter, not through the middle. Edges to container children naturally cross the container boundary — don't route around it. When conflicts are unavoidable, prefer edge-edge crossings over edge-vertex crossings.
+
+**P3 — Keep routing simple and clean:**
+- Minimum waypoints. No waypoints or exit/entry overrides when source and target are aligned with no obstacles — let the auto-router produce a clean center-to-center connection.
+- Every edge exits and enters as a ≥20px straight perpendicular stub. No segment should run laterally along a shape's border. Exit toward the target side, enter from the source side. Never route back over source or target.
+- Single edge on a shape side → connect at center (0.5). Spread entry/exit points (0.25/0.5/0.75) only when multiple edges connect to the same side of the *same* shape.
+- **Bundle fan-out/fan-in edges into a shared trunk:** When N edges leave the same side of a shape, exit them from the same point (e.g., all at `exitX=0.5;exitY=1`), route to a shared waypoint 40px out, then branch to individual targets. Mirror for fan-in: branches converge at a shared waypoint before entering the target. This prevents outer fan edges from crossing inner siblings. Spread `entryX`/`exitX` only at the target/source shape (e.g., 0.25/0.5/0.75 for 3 edges).
+- Unrelated parallel edges: offset ≥20px apart.
+- All waypoints must be axis-aligned with the next point and ≥20px from all non-source/target shapes. First waypoint straight ahead in exit direction; last waypoint straight from entry direction.
+- Use `rounded=1` on edges. Use `jettySize=auto`. Edge labels: set `value` directly, no HTML wrapping.
+
+Waypoint syntax:
+```xml
+<mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="a" target="b">
+  <mxGeometry relative="1" as="geometry">
+    <Array as="points">
+      <mxPoint x="300" y="150"/>
+    </Array>
+  </mxGeometry>
+</mxCell>
+```
+
+**Review:** After generating all XML, verify: (1) directly connected nodes are center-aligned on their shared axis, (2) no edge segment crosses a non-source/target vertex, (3) all waypoints ≥20px from shapes. Fix before outputting.
 
 ## Containers and groups
 
@@ -109,6 +135,7 @@ Set `parent="containerId"` on child cells. Children use **relative coordinates**
 
 ### Key rules
 
+- **Edges to children inside containers naturally cross the container boundary** — this is correct and expected. Do not add extra waypoints or complex routing to avoid a parent container when connecting to shapes inside it.
 - **Always add `pointerEvents=0;`** to container styles that should not capture connections being rewired between children
 - Only omit `pointerEvents=0` when the container itself needs to be connectable — in that case, use `swimlane` style which handles this correctly (the client area is transparent for mouse events while the header remains connectable)
 - Children must set `parent="containerId"` and use coordinates **relative to the container**
