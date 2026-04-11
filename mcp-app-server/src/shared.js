@@ -528,6 +528,7 @@ function notifySize(tag)
 var streamGraph = null;
 var streamPendingEdges = null;
 var streamFitRaf = null;
+var pendingToolInputTimer = null;
 
 /**
  * Standalone merge: inserts or updates cells from xmlNode into the graph
@@ -1271,8 +1272,9 @@ app.ontoolinput = function(params)
       streamContainer.style.transition = 'opacity 0.3s ease-out';
       streamContainer.style.opacity = '0';
 
-      setTimeout(function()
+      pendingToolInputTimer = setTimeout(function()
       {
+        pendingToolInputTimer = null;
         endStreaming();
         renderDiagram(xml).catch(function(e)
         {
@@ -1297,6 +1299,13 @@ app.ontoolinput = function(params)
 
 app.ontoolresult = function(result)
 {
+  // Cancel pending ontoolinput render — tool result is authoritative
+  if (pendingToolInputTimer != null)
+  {
+    clearTimeout(pendingToolInputTimer);
+    pendingToolInputTimer = null;
+  }
+
   var textBlock = result.content && result.content.find(function(c) { return c.type === "text"; });
 
   endStreaming();

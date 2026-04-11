@@ -32,6 +32,19 @@ function postprocess(xmlString)
 	var afterModel = parser.parseXml(outputXml);
 	var after = metrics.computeAllMetrics(afterModel);
 
+	// Guard: revert if post-processing made things worse
+	// (e.g. collision fixer adding detours that create new intersections
+	// in sequence diagrams where edges naturally cross participant boxes)
+	if (before.intersections > 0 && after.intersections >= before.intersections)
+	{
+		return {
+			xml: xmlString,
+			before: before,
+			after: before,
+			changes: { simplified: 0, collisionsFixed: 0, straightened: 0 }
+		};
+	}
+
 	return {
 		xml: outputXml,
 		before: before,
