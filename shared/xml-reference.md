@@ -26,14 +26,14 @@ Detailed reference for styles, edge routing, containers, layers, tags, metadata,
 
 **Arrow (edge):**
 ```xml
-<mxCell id="4" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="2" target="3" parent="1">
+<mxCell id="4" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="2" target="3" parent="1">
   <mxGeometry relative="1" as="geometry"/>
 </mxCell>
 ```
 
 **Labeled arrow:**
 ```xml
-<mxCell id="5" value="Yes" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="3" target="6" parent="1">
+<mxCell id="5" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;" edge="1" source="3" target="6" parent="1">
   <mxGeometry relative="1" as="geometry"/>
 </mxCell>
 ```
@@ -75,6 +75,8 @@ HTML in attribute values must be **XML-escaped**: `<` → `&lt;`, `>` → `&gt;`
 ```
 
 **Best practice:** Always include `html=1` in every cell style. This ensures labels render correctly whether they contain HTML or plain text — plain text is unaffected by the flag.
+
+**Bold/italic/underline:** Use `fontStyle` in the style string when the entire label should be bold (`fontStyle=1`), italic (`fontStyle=2`), or underline (`fontStyle=4`). Values can be combined via bitwise OR (e.g., `fontStyle=3` = bold+italic). Use HTML tags (`<b>`, `<i>`, `<u>`) only when formatting part of the label (e.g., bold title with normal description). Never combine `fontStyle` with HTML tags for the same effect — this is redundant and causes visible raw tags if `html=1` is missing.
 
 ## Edge routing
 
@@ -122,7 +124,7 @@ The auto-router has NO obstacle avoidance. Follow these priorities:
 
 Waypoint syntax:
 ```xml
-<mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="a" target="b">
+<mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="a" target="b">
   <mxGeometry relative="1" as="geometry">
     <Array as="points">
       <mxPoint x="300" y="150"/>
