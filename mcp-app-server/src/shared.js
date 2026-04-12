@@ -1372,6 +1372,19 @@ fullscreenBtn.addEventListener("click", function()
   app.requestDisplayMode({ mode: "fullscreen" });
 });
 
+// Re-render when tab becomes visible if the viewer failed to initialize
+// in the background (rAF is suspended in inactive tabs)
+document.addEventListener('visibilitychange', function()
+{
+  if (!document.hidden && currentXml && graphViewer == null)
+  {
+    renderDiagram(currentXml).catch(function(e)
+    {
+      showError("Failed to render diagram: " + e.message);
+    });
+  }
+});
+
 app.connect();
     </script>
   </body>
