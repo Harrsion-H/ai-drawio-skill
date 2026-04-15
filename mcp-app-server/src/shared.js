@@ -120,6 +120,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
     </div>
 
     <!-- draw.io viewer -->
+    <script>window.DRAWIO_BASE_URL = "https://app.diagrams.net";<\/script>
     ${viewerJs
       ? '<script>' + viewerJs + '<\/script>'
       : '<script src="https://viewer.diagrams.net/js/viewer-static.min.js" async><\/script>'

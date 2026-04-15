@@ -354,6 +354,60 @@ for (var i = 0; i < capturedShapes.length; i++)
 
 console.log("After deduplication: " + deduplicated.length + " unique shapes");
 
+// ── Derive titles for shapes that have tags but no title ────────────────────
+// Some palettes (AWS4, clipart) create shapes without titles, making them
+// unidentifiable when returned by search_shapes. Derive a title from the
+// tags or style attributes.
+
+var titleFixCount = 0;
+
+for (var i = 0; i < deduplicated.length; i++)
+{
+  if (!deduplicated[i].title && deduplicated[i].tags)
+  {
+    var style = deduplicated[i].style;
+    var derived = null;
+
+    // For stencil shapes, extract the last part of the shape name
+    var resIconMatch = style.match(/resIcon=mxgraph\.[^;]+\.([^;]+)/);
+    var shapeMatch = style.match(/shape=mxgraph\.[^;]+\.([^;]+)/);
+
+    if (resIconMatch)
+    {
+      derived = resIconMatch[1];
+    }
+    else if (shapeMatch)
+    {
+      derived = shapeMatch[1];
+    }
+
+    // For image shapes, extract filename from the image path
+    if (!derived)
+    {
+      var imageMatch = style.match(/image=[^;]*\/([^\/;]+?)(?:\.\w+)?(?:;|$)/);
+
+      if (imageMatch)
+      {
+        derived = imageMatch[1];
+      }
+    }
+
+    if (derived)
+    {
+      // Clean up: replace underscores/hyphens with spaces, title case
+      derived = derived.replace(/[_-]/g, " ").replace(/\b\w/g, function(c)
+      {
+        return c.toUpperCase();
+      });
+
+      deduplicated[i].title = derived;
+      titleFixCount++;
+    }
+  }
+}
+
+console.log("Derived " + titleFixCount + " titles from style attributes");
+
 // ── Write output ─────────────────────────────────────────────────────────────
 
 var outPath = path.join(__dirname, "search-index.json");
