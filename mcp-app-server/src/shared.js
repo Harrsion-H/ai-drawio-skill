@@ -3280,6 +3280,7 @@ export function createServer(html, options = {})
       title: "Create Diagram",
       description:
         "Creates and displays an interactive draw.io diagram. Accepts either draw.io XML or Mermaid.js syntax — provide exactly one.\n\n" +
+        "**Format decision — this is the first thing to settle before you write anything:** if the diagram type appears on the Mermaid list below, use `mermaid`. Only use `xml` when the diagram type isn't on that list (UI mockups, floorplans, cloud/network/electrical architecture with stencils, hand-placed UML, etc.) or when the user has explicitly asked for draw.io XML.\n\n" +
         "**Use Mermaid** for the following diagram types (all rendered natively, no upstream mermaid runtime):\n" +
         "  - flowchart / graph (TD, LR, …)\n" +
         "  - sequenceDiagram\n" +
