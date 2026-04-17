@@ -10,7 +10,7 @@
 
 import { createServer } from "./shared.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { html, xmlReference, shapeIndex, faviconBase64 } from "./generated-html.js";
+import { html, xmlReference, mermaidReference, shapeIndex, faviconBase64 } from "./generated-html.js";
 
 const CORS_HEADERS =
 {
@@ -114,7 +114,7 @@ export class MCPSessionManager
         this.log(`[session-create] domain=${this.env.DOMAIN || "UNDEFINED"} session=${sessionId.slice(0, 8)}`);
       }
 
-      const server = createServer(html, { domain: this.env.DOMAIN, xmlReference, shapeIndex });
+      const server = createServer(html, { domain: this.env.DOMAIN, xmlReference, mermaidReference, shapeIndex });
       const transport = new WebStandardStreamableHTTPServerTransport(
       {
         sessionIdGenerator: function() { return sessionId; },

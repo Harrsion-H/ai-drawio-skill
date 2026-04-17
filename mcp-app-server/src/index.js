@@ -24,6 +24,23 @@ const pakoDeflateJs = fs.readFileSync(
   "utf-8"
 );
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Inline the drawio-mermaid IIFE bundle (native Mermaid parser + layout,
+// replaces the upstream ~2.7 MB mermaid.min.js + extensions.min.js runtime).
+// Sibling-repo layout: ../../../drawio-mermaid/dist/mermaid.bundled.js. Build
+// drawio-mermaid (`npm run build`) before starting the MCP app server.
+const mermaidBundlePath = path.join(
+  __dirname, "..", "..", "..", "drawio-mermaid", "dist", "mermaid.bundled.js"
+);
+const mermaidJs = fs.readFileSync(mermaidBundlePath, "utf-8");
+
+// Inline the mxElkLayout wrapper (vendored from drawio-dev origin/elk-layout
+// — see vendor/elk/README.md). Powers the optional postLayout pass on
+// create_diagram. The ELK engine itself is bundled into drawio-mermaid and
+// published as `globalThis.ELK` at load time.
+const mxElkLayoutJs = fs.readFileSync(path.join(__dirname, "..", "vendor", "elk", "mxElkLayout.js"), "utf-8");
+
 // Optionally inline a local viewer build (for testing GraphViewer changes).
 // Set VIEWER_PATH env var to the path of viewer-static.min.js (or a directory
 // containing it plus GraphViewer.js). Example:
@@ -56,9 +73,16 @@ if (process.env.VIEWER_PATH)
 }
 
 // Read the shared XML reference once at startup (single source of truth)
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const xmlReference = fs.readFileSync(
   path.join(__dirname, "..", "..", "shared", "xml-reference.md"),
+  "utf-8"
+);
+
+// Same for the Mermaid syntax reference — appended to the create_diagram
+// tool description so the LLM gets concrete per-type syntax hints for
+// every supported Mermaid diagram plus flowchart styling guidance.
+const mermaidReference = fs.readFileSync(
+  path.join(__dirname, "..", "..", "shared", "mermaid-reference.md"),
   "utf-8"
 );
 
@@ -73,7 +97,7 @@ if (fs.existsSync(shapeIndexPath))
 }
 
 // Pre-build the HTML once
-const html = buildHtml(appWithDepsJs, pakoDeflateJs, { viewerJs });
+const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { viewerJs, mxElkLayoutJs });
 
 // --- Transport setup ---
 
@@ -131,7 +155,7 @@ async function startStreamableHTTPServer()
       return origEnd(chunk);
     };
 
-    const server = createServer(html, { domain: process.env.DOMAIN, xmlReference, shapeIndex });
+    const server = createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex });
 
     const transport = new StreamableHTTPServerTransport(
     {
@@ -183,7 +207,7 @@ async function startStreamableHTTPServer()
 
 async function startStdioServer()
 {
-  await createServer(html, { domain: process.env.DOMAIN, xmlReference, shapeIndex }).connect(new StdioServerTransport());
+  await createServer(html, { domain: process.env.DOMAIN, xmlReference, mermaidReference, shapeIndex }).connect(new StdioServerTransport());
 }
 
 async function main()

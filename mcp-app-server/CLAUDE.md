@@ -15,12 +15,14 @@ Renders draw.io diagrams inline in AI chat interfaces using the MCP Apps protoco
 
 ### How the HTML is built
 
-At startup (Node.js) or build time (Workers), two bundles are read from `node_modules` and inlined into a self-contained HTML string:
+At startup (Node.js) or build time (Workers), three bundles are inlined into a self-contained HTML string:
 
-- **`app-with-deps.js`** (~319 KB) — MCP Apps SDK browser bundle from `@modelcontextprotocol/ext-apps`. The bundle is ESM (ends with `export { ... as App }`), so `processAppBundle()` strips the export statement and creates a local `var App = <minifiedName>` alias. This makes it safe to inline in a plain `<script>` tag inside the sandboxed iframe.
-- **`pako_deflate.min.js`** (~28 KB) — for compressing XML into the `#create=` URL format.
+- **`app-with-deps.js`** (~319 KB, from `node_modules/@modelcontextprotocol/ext-apps`) — MCP Apps SDK browser bundle. The bundle is ESM (ends with `export { ... as App }`), so `processAppBundle()` strips the export statement and creates a local `var App = <minifiedName>` alias. This makes it safe to inline in a plain `<script>` tag inside the sandboxed iframe.
+- **`pako_deflate.min.js`** (~28 KB, from `node_modules/pako`) — for compressing XML into the `#create=` URL format.
+- **`drawio-mermaid/dist/mermaid.bundled.js`** (~1.9 MB, from sibling repo `../../drawio-mermaid/`) — native Mermaid parser + layout that emits draw.io cells via `mxMermaidToDrawio.parseText(text, config)`. Replaces the upstream ~2.7 MB `mermaid.min.js` + `extensions.min.js` runtime the client previously lazy-loaded from `app.diagrams.net`. Supports 26 diagram types. The bundle also publishes `globalThis.ELK` (Eclipse Layout Kernel, ~1.6 MB) — consumed by the `postLayout` pass. Build the sibling repo (`cd ../../drawio-mermaid && npm run build`) before starting/building the MCP app server.
+- **`vendor/elk/mxElkLayout.js`** — mxGraph wrapper around ELK (`buildElkGraph`, `applyElkLayout`, `executeAsync`). Powers the optional `postLayout` parameter on `create_diagram`. Vendored from drawio-dev `origin/elk-layout` branch; see `vendor/elk/README.md` for refresh instructions. Will switch to sibling-repo reference once the branch lands on dev.
 
-The draw.io viewer (`viewer-static.min.js`) is loaded from CDN at runtime.
+The draw.io viewer (`viewer-static.min.js`) is loaded from CDN at runtime. The mermaid bundle must be inlined **after** pako so that its `mermaidShapes.js` side-effect sees `mxCellRenderer`/`mxActor` from the viewer — the viewer `<script src>` blocks subsequent tags.
 
 ### Sandbox constraints
 
@@ -69,9 +71,20 @@ The Worker uses **4 sharded Durable Objects** (`MCPSessionManager`) to manage al
 - CSP config goes on the **resource contents** `_meta.ui.csp`, not on the tool's `_meta.ui`
 - TypeScript narrowing: use `if (block.type === "text")` before accessing `.text` on content blocks
 
-## XML Reference
+## XML and Mermaid References
 
-The tool description for `create_diagram` is loaded at startup from `shared/xml-reference.md` (single source of truth for all prompts). The `xmlReference` string is passed to `createServer()` via options. For the Cloudflare Worker, it is pre-built into `generated-html.js` by `build-html.js`.
+The tool description for `create_diagram` is composed at startup from two canonical reference files in `shared/`:
+
+- **`shared/xml-reference.md`** — loaded as the `xmlReference` option on `createServer()`; covers draw.io XML styles, edge routing, containers, metadata.
+- **`shared/mermaid-reference.md`** — loaded as the `mermaidReference` option; covers syntax for all 26 supported Mermaid diagram types plus flowchart styling (`style`, `classDef`, `linkStyle`). Appended after the XML reference in the final description.
+
+For the Cloudflare Worker, both files are pre-built into `generated-html.js` (exported as named strings) by `build-html.js` and re-imported by `worker.js`. The Node.js path reads them directly from `shared/` at startup.
+
+## Mermaid Conversion
+
+`convertMermaidToXml()` in `shared.js` is a thin synchronous wrapper around `mxMermaidToDrawio.parseText(text, config)` exposed by the inlined drawio-mermaid bundle. No listener plumbing, no 10 s timeout, no upstream mermaid runtime — `parseText` runs the full parse + layout pipeline and returns draw.io XML directly. The only wait before calling it is `waitForGraphViewer()`, because the cell factory still needs `Graph`, `mxCodec`, and `mxUtils` from `viewer-static.min.js`.
+
+Returns `null` for unsupported diagram types — the wrapper converts that to a rejected promise so the UI surfaces a clear error.
 
 ## Shape Search Index
 

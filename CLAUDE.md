@@ -93,15 +93,16 @@ Opens the draw.io editor with a Mermaid.js diagram definition.
 4. **Validate syntax**: Ensure Mermaid/CSV/XML syntax is correct before sending
 5. **Return the URL to users**: Always provide the generated URL so users can open the diagram in their browser
 
-## XML Reference (Single Source of Truth)
+## Shared References (Single Source of Truth)
 
-The complete draw.io XML generation reference — including edge routing, containers, layers, tags, metadata, dark mode colors, style properties, and XML well-formedness rules — lives in a single canonical file:
+Two canonical reference files live in `shared/` and feed every delivery mechanism (MCP App Server, MCP Tool Server, Skill + CLI, Project Instructions):
 
-**`shared/xml-reference.md`**
+- **`shared/xml-reference.md`** — draw.io XML generation reference: styles, edge routing, containers, layers, tags, metadata, dark mode, well-formedness rules. Consumed by `create_diagram` (mcp-app-server) and `open_drawio_xml` (mcp-tool-server).
+- **`shared/mermaid-reference.md`** — Mermaid syntax reference for all 26 supported diagram types (flowchart, sequence, class, state, ER, gantt, mindmap, timeline, quadrant, C4, architecture, radar, packet, venn, treemap, kanban, zenuml, …) plus flowchart styling (`style`, `classDef`, `linkStyle`). Consumed by `open_drawio_mermaid` (mcp-tool-server).
 
-All four delivery mechanisms (MCP App Server, MCP Tool Server, Skill + CLI, and Project Instructions) use this file as their single source of truth. The MCP servers read it at startup and include it in their tool descriptions. The skill and project instructions reference it via the GitHub URL.
+The MCP servers read these files at startup and append them to the relevant tool description. The skill and project instructions reference them via GitHub URL.
 
-When updating XML generation guidance, edit only this file — changes propagate to all consumers automatically.
+When updating diagram-generation guidance, edit only these files — changes propagate to all consumers automatically.
 
 ## Coding Conventions
 

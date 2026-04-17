@@ -9,20 +9,38 @@ import { normalizeDiagramXml, INVALID_DIAGRAM_XML_MESSAGE } from "./normalize-di
 import postprocessModule from "../../postprocessor/postprocess.js";
 var postprocessDiagramXml = postprocessModule.postprocess;
 
+// Cloudflare Workers don't give you wall-clock time at module-init —
+// new Date() at top-level returns epoch (1970). We lazy-initialize
+// the version string on first request (which has real wall-clock),
+// and cache it. Value will be close to "first request after the
+// worker cold-started" which is a few ms after deploy rollout.
+var _buildVersion = null;
+function getBuildVersion()
+{
+  if (_buildVersion == null)
+  {
+    _buildVersion = "drawio-mcp-" + new Date().toISOString();
+  }
+  return _buildVersion;
+}
+
 /**
  * Build the self-contained HTML string that renders diagrams.
- * All dependencies (ext-apps App class, pako deflate) are inlined
- * so the HTML works in a sandboxed iframe with no extra fetches.
+ * All dependencies (ext-apps App class, pako deflate, drawio-mermaid)
+ * are inlined so the HTML works in a sandboxed iframe with no extra
+ * fetches.
  *
  * @param {string} appWithDepsJs - The processed MCP Apps SDK bundle (exports stripped, App alias added).
  * @param {string} pakoDeflateJs - The pako deflate browser bundle.
+ * @param {string} mermaidJs - The drawio-mermaid IIFE bundle (dist/mermaid.bundled.js). Exposes `mxMermaidToDrawio.parseText(text, config)`.
  * @param {object} [options] - Optional configuration.
  * @param {string} [options.viewerJs] - If provided, inlines this JS instead of loading viewer-static.min.js from CDN.
  * @returns {string} Self-contained HTML string.
  */
-export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
+export function buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, options)
 {
   var viewerJs = (options && options.viewerJs) || null;
+  var mxElkLayoutJs = (options && options.mxElkLayoutJs) || null;
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -36,6 +54,7 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
 
       html {
         color-scheme: light dark;
+        overflow: hidden;
       }
 
       body {
@@ -65,10 +84,12 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
       #diagram-container {
         display: none;
         min-width: 200px;
+        max-width: 100%;
+        overflow: hidden;
       }
       #diagram-container.streaming {
-        min-height: 400px;
-        overflow: hidden;
+        min-height: 320px;
+        max-height: 650px;
         position: relative;
       }
       #diagram-container.streaming > div {
@@ -76,7 +97,25 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
         height: 100% !important;
         overflow: hidden !important;
       }
-      #diagram-container .mxgraph { width: 100%; max-width: 100%; color-scheme: light dark !important; }
+      /* GraphViewer sets inline width on its wrappers based on the
+         diagram's natural width, which can exceed the iframe width and
+         create a horizontal scrollbar between the SVG and the toolbar.
+         !important + descendant rules force everything to fit. */
+      #diagram-container .mxgraph,
+      #diagram-container .mxgraph > div,
+      #diagram-container .mxgraph > div > div {
+        max-width: 100% !important;
+        overflow: hidden !important;
+      }
+      #diagram-container .mxgraph {
+        width: 100% !important;
+        color-scheme: light dark !important;
+      }
+      #diagram-container .mxgraph > svg,
+      #diagram-container .mxgraph svg {
+        max-width: 100% !important;
+        height: auto;
+      }
 
       #toolbar {
         display: none;
@@ -107,11 +146,28 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
         color: #c0392b;
         font-size: 13px;
       }
+
+      #mermaid-preview {
+        display: none;
+        padding: 16px;
+        font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-y: auto;
+        max-height: 500px;
+        background: var(--color-bg-secondary, #f5f5f5);
+        border-radius: 8px;
+        margin: 8px;
+        color: var(--color-text-primary, #1a1a1a);
+      }
     </style>
   </head>
   <body>
     <div id="loading"><div class="spinner"></div>Creating diagram...</div>
     <div id="error"></div>
+    <pre id="mermaid-preview"></pre>
     <div id="diagram-container"></div>
     <div id="toolbar">
       <button id="open-drawio">Open in draw.io</button>
@@ -123,11 +179,30 @@ export function buildHtml(appWithDepsJs, pakoDeflateJs, options)
     <script>window.DRAWIO_BASE_URL = "https://app.diagrams.net";<\/script>
     ${viewerJs
       ? '<script>' + viewerJs + '<\/script>'
-      : '<script src="https://viewer.diagrams.net/js/viewer-static.min.js" async><\/script>'
+      : '<script src="https://viewer.diagrams.net/js/viewer-static.min.js"><\/script>'
     }
 
     <!-- pako deflate (inlined, for #create URL generation) -->
     <script>${pakoDeflateJs}</script>
+
+    <!-- drawio-mermaid (inlined). Exposes mxMermaidToDrawio.parseText(text, config).
+         Loaded after the viewer so mermaidShapes.js can see mxCellRenderer/mxActor. -->
+    <script>
+      // mxMermaidToDrawio.parseText() reads EditorUi.prototype.emptyDiagramXml
+      // as a fallback when a diagram type isn't supported. Stub it defensively
+      // — the real value comes from the viewer, but parseText can be called
+      // before that's wired up in some error paths.
+      if (typeof EditorUi !== 'undefined' && EditorUi.prototype.emptyDiagramXml == null)
+      {
+        EditorUi.prototype.emptyDiagramXml = '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel>';
+      }
+    </script>
+    <script>${mermaidJs}</script>
+
+    ${mxElkLayoutJs
+      ? '<!-- mxElkLayout wrapper: buildElkGraph, applyElkLayout, executeAsync. Depends on mxGraph (viewer) + ELK (published on window by drawio-mermaid above). -->\n    <script>' + mxElkLayoutJs + '<\/script>'
+      : ''
+    }
 
     <!-- MCP Apps SDK (inlined, exports stripped, App alias added) -->
     <script>
@@ -220,12 +295,249 @@ function healPartialXml(partialXml)
   return xml;
 }
 
+// --- Mermaid streaming: heal partial text + content-address cell IDs ---
+
+// De-dupe: last healed+parsed text we merged. Reset on endStreaming.
+var lastMergedMermaidText = null;
+
+/**
+ * Keeps only cell IDs whose parent is the default root ('1') — i.e.,
+ * top-level cells, not nested children. Used to skip per-cell pop
+ * animations on nested structures (ER table rows, flowchart subgraph
+ * contents) so pops happen at the container level only.
+ */
+function filterTopLevelCellIds(graph, ids)
+{
+  if (graph == null || ids == null) return [];
+  var model = graph.getModel();
+  var out = [];
+
+  for (var i = 0; i < ids.length; i++)
+  {
+    var cell = model.getCell(ids[i]);
+    if (cell == null) continue;
+    var p = cell.parent;
+    if (p == null) continue;
+    if (p.id === '1') out.push(ids[i]);
+  }
+
+  return out;
+}
+
+/**
+ * Keeps only IDs whose cell is a vertex. Used to feed the smart-camera
+ * focus tracker — edges can span the full diagram and would bloat the
+ * "hot region" bbox, defeating the close-up focus on new content.
+ */
+function filterVertexCellIds(graph, ids)
+{
+  if (graph == null || ids == null) return [];
+  var model = graph.getModel();
+  var out = [];
+
+  for (var i = 0; i < ids.length; i++)
+  {
+    var cell = model.getCell(ids[i]);
+    if (cell != null && cell.vertex) out.push(ids[i]);
+  }
+
+  return out;
+}
+
+/**
+ * Trims a partial mermaid string so the parser doesn't choke on a
+ * half-typed last line. Returns null when there isn't enough content
+ * to attempt a parse yet (no complete line, or no body after the type
+ * declaration).
+ *
+ * @param {string} partialText
+ * @returns {string|null}
+ */
+function healMermaidText(partialText)
+{
+  if (partialText == null || typeof partialText !== 'string') return null;
+
+  var lastNewline = partialText.lastIndexOf('\\n');
+  if (lastNewline < 0) return null; // single line, possibly incomplete
+
+  var trimmed = partialText.substring(0, lastNewline);
+  // Need at least a type declaration and one body line — i.e. another newline
+  // somewhere in the trimmed prefix.
+  if (trimmed.indexOf('\\n') < 0) return null;
+
+  return trimmed;
+}
+
+/**
+ * 32-bit FNV-1a hash, hex string. Stable across runs and across browsers.
+ * Used to derive content-addressed cell IDs.
+ */
+function hashString32(s)
+{
+  var h = 0x811c9dc5;
+  for (var i = 0; i < s.length; i++)
+  {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return ('00000000' + h.toString(16)).slice(-8);
+}
+
+/**
+ * Rewrites every cell ID in a mermaid-emitted mxGraphModel XML string to
+ * a deterministic content-addressed value, so prefix re-parses produce
+ * stable IDs for shared cells. Internal ID references (parent, source,
+ * target) are rewritten consistently.
+ *
+ * The hash key for each cell is built from properties that don't change
+ * across prefix parses: parent's stable ID, value, style, and (for edges)
+ * the source/target stable IDs. Collisions on identical content are
+ * disambiguated with a #1, #2, ... suffix preserved by document order.
+ *
+ * Roots '0' and '1' are passed through verbatim — streamInsertCell
+ * special-cases them.
+ *
+ * @param {string} xml - mxGraphModel XML returned by mxMermaidToDrawio.parseText
+ * @returns {string} XML with stabilized IDs (or the original on error)
+ */
+function stabilizeMermaidIds(xml)
+{
+  if (xml == null || typeof xml !== 'string') return xml;
+  if (typeof mxUtils === 'undefined' || typeof mxUtils.parseXml !== 'function') return xml;
+
+  var doc;
+  try { doc = mxUtils.parseXml(xml); }
+  catch (e) { return xml; }
+
+  var top = doc.documentElement;
+  var rootEl = null;
+
+  if (top.nodeName === 'root') rootEl = top;
+  else if (top.nodeName === 'mxGraphModel')
+  {
+    var rs = top.getElementsByTagName('root');
+    if (rs.length > 0) rootEl = rs[0];
+  }
+
+  if (rootEl == null) return xml;
+
+  var idMap = { '0': '0', '1': '1' };
+  var collisionCount = {};
+
+  function makeStableId(prefix, contentKey)
+  {
+    var base = prefix + '_' + hashString32(contentKey);
+    var n = collisionCount[base];
+
+    if (n == null)
+    {
+      collisionCount[base] = 0;
+      return base;
+    }
+
+    n += 1;
+    collisionCount[base] = n;
+    return base + '_' + n;
+  }
+
+  var children = rootEl.childNodes;
+
+  // Resolve the (carrier, attrSrc) pair for a child node. UserObject /
+  // object wrappers carry the id externally and everything else on an
+  // inner <mxCell>; plain <mxCell> cells carry both on themselves.
+  function pair(node)
+  {
+    var inner = null;
+
+    if (node.nodeName === 'UserObject' || node.nodeName === 'object')
+    {
+      var innerCells = node.getElementsByTagName('mxCell');
+      if (innerCells.length > 0) inner = innerCells[0];
+    }
+
+    return { carrier: node, attrSrc: (inner != null) ? inner : node };
+  }
+
+  // Two-pass rename. The gitgraph cell factory (and possibly others in
+  // the future) re-orders cells after creation so edges can land before
+  // the vertices they reference in document order. A single-pass rename
+  // that processes cells in document order would hit each edge with an
+  // empty idMap and silently skip the source/target rewrite, orphaning
+  // the edge. Pass 1 populates idMap for every non-edge cell so pass 2
+  // can always resolve source/target stable IDs — and so the edge's own
+  // content key (which incorporates the stable source/target) remains
+  // deterministic regardless of sibling order.
+  for (var i = 0; i < children.length; i++)
+  {
+    var node = children[i];
+    if (node.nodeType !== 1) continue;
+
+    var p = pair(node);
+    var oldId = p.carrier.getAttribute('id');
+
+    if (oldId == null || oldId === '0' || oldId === '1') continue;
+    if (p.attrSrc.getAttribute('edge') === '1') continue;
+
+    var value = p.carrier.getAttribute('value') || p.attrSrc.getAttribute('value') || '';
+    var isVertex = p.attrSrc.getAttribute('vertex') === '1';
+    var parentId = p.attrSrc.getAttribute('parent');
+
+    var stableParent = (parentId != null && idMap[parentId] != null)
+      ? idMap[parentId] : (parentId || '1');
+
+    // NB: 'style' is intentionally NOT in the content key — mermaid
+    // mutates a cell's style as more context arrives (classDef applied
+    // later, theme adjustments) which would otherwise re-hash the cell
+    // to a new ID and orphan the original in the model. Style changes
+    // are still applied on each merge via the existing-cell update path.
+    idMap[oldId] = makeStableId(isVertex ? 'v' : 'c', stableParent + '|' + value);
+  }
+
+  // Pass 2: rewrite IDs and references. Edges now see a complete idMap
+  // and get deterministic source/target-derived content keys.
+  for (var i = 0; i < children.length; i++)
+  {
+    var node = children[i];
+    if (node.nodeType !== 1) continue;
+
+    var p = pair(node);
+    var oldId = p.carrier.getAttribute('id');
+
+    if (oldId == null || oldId === '0' || oldId === '1') continue;
+
+    var parentId = p.attrSrc.getAttribute('parent');
+    var sourceId = p.attrSrc.getAttribute('source');
+    var targetId = p.attrSrc.getAttribute('target');
+    var isEdge = p.attrSrc.getAttribute('edge') === '1';
+
+    var stableParent = (parentId != null && idMap[parentId] != null)
+      ? idMap[parentId] : (parentId || '1');
+
+    if (isEdge)
+    {
+      var value = p.carrier.getAttribute('value') || p.attrSrc.getAttribute('value') || '';
+      var stableSrc = (sourceId != null && idMap[sourceId] != null) ? idMap[sourceId] : (sourceId || '');
+      var stableTgt = (targetId != null && idMap[targetId] != null) ? idMap[targetId] : (targetId || '');
+      idMap[oldId] = makeStableId('e', stableSrc + '|' + stableTgt + '|' + value);
+    }
+
+    p.carrier.setAttribute('id', idMap[oldId]);
+
+    if (parentId != null) p.attrSrc.setAttribute('parent', stableParent);
+    if (sourceId != null && idMap[sourceId] != null) p.attrSrc.setAttribute('source', idMap[sourceId]);
+    if (targetId != null && idMap[targetId] != null) p.attrSrc.setAttribute('target', idMap[targetId]);
+  }
+
+  return mxUtils.getXml(top);
+}
+
 // --- Client-side app logic ---
 
 const loadingEl  = document.getElementById("loading");
 const errorEl    = document.getElementById("error");
 const containerEl = document.getElementById("diagram-container");
 const toolbarEl  = document.getElementById("toolbar");
+const mermaidPreviewEl = document.getElementById("mermaid-preview");
 const openDrawioBtn  = document.getElementById("open-drawio");
 const fullscreenBtn  = document.getElementById("fullscreen-btn");
 const copyXmlBtn     = document.getElementById("copy-xml-btn");
@@ -239,11 +551,20 @@ var streamingInitialized = false;
 
 var app = new App({ name: "draw.io Diagram Viewer", version: "1.0.0" });
 
-function showError(message)
+function showError(message, err)
 {
   loadingEl.style.display = "none";
   errorEl.style.display = "block";
   errorEl.textContent = message;
+
+  // Also surface to the iframe's devtools console with a stack trace,
+  // so bugs that manifest as a red box in the viewer are diagnosable
+  // without instrumenting every catch block by hand.
+  if (typeof console !== 'undefined' && console.error)
+  {
+    var stack = (err && err.stack) ? err.stack : new Error(message).stack;
+    console.error('[drawio-viewer] ' + message + '\\n' + stack);
+  }
 }
 
 function waitForGraphViewer()
@@ -270,6 +591,43 @@ function waitForGraphViewer()
       }
     }, 100);
   });
+}
+
+function convertMermaidToXml(mermaidText)
+{
+  // The drawio-mermaid bundle (inlined at load time) exposes
+  // mxMermaidToDrawio.parseText(text, config), which runs the full
+  // parse + layout pipeline synchronously and returns draw.io XML.
+  // No upstream mermaid runtime, no listener plumbing, no timeout.
+  if (typeof mxMermaidToDrawio === 'undefined' ||
+      typeof mxMermaidToDrawio.parseText !== 'function')
+  {
+    return Promise.reject(new Error("drawio-mermaid bundle not loaded"));
+  }
+
+  var config = {
+    theme: (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'default'
+  };
+
+  try
+  {
+    var xml = mxMermaidToDrawio.parseText(mermaidText, config);
+
+    if (xml == null)
+    {
+      return Promise.reject(new Error("Unsupported Mermaid diagram type"));
+    }
+
+    // Stabilize cell IDs so the streaming preview and the final render
+    // share identity for the same cells. parseText auto-assigns sequential
+    // IDs that shift across prefix re-parses; stabilizeMermaidIds rewrites
+    // them to deterministic content-addressed values.
+    return Promise.resolve(stabilizeMermaidIds(xml));
+  }
+  catch (e)
+  {
+    return Promise.reject(e);
+  }
 }
 
 function generateDrawioEditUrl(xml)
@@ -433,8 +791,323 @@ function showAllCells(graph, cells)
   }
 }
 
-async function renderDiagram(xml)
+/**
+ * Serialize the current graph model to draw.io XML. Used after a post-
+ * layout pass so currentXml and drawioEditUrl reflect what the user
+ * sees in the viewer — not the pre-pass XML from the server.
+ */
+function serializeGraphXml(graph)
 {
+  try
+  {
+    var codec = new mxCodec();
+    var node = codec.encode(graph.getModel());
+    return mxUtils.getXml(node);
+  }
+  catch (e)
+  {
+    return null;
+  }
+}
+
+/**
+ * Configure an mxElkLayout instance for the requested algorithm.
+ * Returns null if the algorithm is unknown or the ELK bundle failed
+ * to load. All options map to ELK's layered/mrtree/force/stress/radial
+ * algorithms — direction only applies to 'layered'.
+ */
+function createPostLayout(graph, algorithm)
+{
+  if (algorithm == null || algorithm === 'none') return null;
+  if (typeof mxElkLayout === 'undefined' || typeof ELK === 'undefined') return null;
+
+  // Algorithm presets mirror drawio-dev's ElkLayout.DEFAULTS so the
+  // viewer's layout output matches the editor's Arrange > Layout
+  // menu (Layered / Tree / Force / Stress / Radial).
+  // Ref: drawio-dev/src/main/webapp/js/diagramly/ElkLayout.js
+  var options = null;
+
+  switch (algorithm)
+  {
+    case 'verticalFlow':
+    case 'horizontalFlow':
+      options = {
+        'elk.algorithm': 'layered',
+        'elk.direction': algorithm === 'verticalFlow' ? 'DOWN' : 'RIGHT',
+        'elk.edgeRouting': 'ORTHOGONAL',
+        'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+        'elk.spacing.nodeNode': '30',
+        'elk.layered.spacing.nodeNodeBetweenLayers': '30',
+        // Reserve space in the layer gap for edge labels so long labels
+        // don't overlap nodes on the next layer.
+        'elk.edgeLabels.inline': 'true',
+        'elk.spacing.edgeLabel': '5',
+        // Keep within-layer Y ordering aligned with child-declaration
+        // order in the model (what mermaid imports and hand-written
+        // XML both rely on).
+        'elk.layered.considerModelOrder.strategy': 'NODES',
+        'elk.layered.crossingMinimization.forceNodeModelOrder': 'true'
+      };
+      break;
+    case 'tree':
+      options = {
+        'elk.algorithm': 'mrtree',
+        'elk.direction': 'DOWN',
+        'elk.spacing.nodeNode': '20',
+        'elk.mrtree.weighting': 'MODEL_ORDER'
+      };
+      break;
+    case 'force':
+      options = {
+        'elk.algorithm': 'force',
+        'elk.spacing.nodeNode': '80',
+        'elk.force.iterations': '300',
+        'elk.force.repulsivePower': '0'
+      };
+      break;
+    case 'stress':
+      options = {
+        'elk.algorithm': 'stress',
+        'elk.spacing.nodeNode': '80',
+        'elk.stress.desiredEdgeLength': '100'
+      };
+      break;
+    case 'radial':
+      options = {
+        'elk.algorithm': 'radial',
+        'elk.spacing.nodeNode': '20'
+      };
+      break;
+    default:
+      return null;
+  }
+
+  var layout = new mxElkLayout(graph, options);
+  layout.algorithm = options['elk.algorithm'];
+  if (options['elk.direction'] != null) layout.direction = options['elk.direction'];
+  return layout;
+}
+
+/**
+ * Apply a post-render layout to the given graph and animate the
+ * vertices morphing from their original positions to the new ones.
+ *
+ * ELK runs async. We snapshot the current model into an ELK graph
+ * synchronously, then when ELK returns we wrap applyElkLayout in a
+ * beginUpdate block deferred by mxMorphing — mirroring the drawio
+ * EditorUi.executeLayout pattern so the view stays on pre-layout
+ * positions during the morph.
+ *
+ * @param {Graph} graph
+ * @param {string} algorithm - Enum value from the postLayout schema.
+ * @param {object} [hints] - Optional layout hints.
+ * @param {string[]} [hints.startNodeIds] - Cell IDs pinned to the first layer.
+ * @param {string[]} [hints.endNodeIds]   - Cell IDs pinned to the last layer.
+ * @param {function(boolean)} [onDone] - Called with true when the
+ *   layout was applied, false when it was skipped or ELK errored.
+ */
+function applyPostLayout(graph, algorithm, hints, onDone)
+{
+  // Backwards-compatible arg shuffle: allow applyPostLayout(graph, alg, cb).
+  if (typeof hints === 'function')
+  {
+    onDone = hints;
+    hints = null;
+  }
+
+  hints = hints || {};
+
+  var done = function(applied)
+  {
+    if (typeof onDone === 'function') onDone(applied);
+  };
+
+  if (graph == null) { done(false); return; }
+
+  var layout = createPostLayout(graph, algorithm);
+  if (layout == null) { done(false); return; }
+
+  var model = graph.getModel();
+  var parent = graph.getDefaultParent();
+
+  var elkGraph;
+  try
+  {
+    elkGraph = layout.buildElkGraph(parent);
+  }
+  catch (e)
+  {
+    done(false);
+    return;
+  }
+
+  if (!elkGraph.children || elkGraph.children.length === 0)
+  {
+    done(false);
+    return;
+  }
+
+  // For layered layouts (verticalFlow / horizontalFlow), pin Start/End
+  // nodes to the first/last layer. When the LLM gave explicit ID lists
+  // via startNodeIds / endNodeIds, use those verbatim — they reflect
+  // intent. Otherwise fall back to topological detection (sources =
+  // nodes with 0 incoming edges → FIRST, sinks = 0 outgoing → LAST),
+  // which handles well-formed acyclic flows but mispicks when a
+  // feedback edge (e.g. error → retry) makes a mid-graph node look
+  // like a source.
+  if (layout.algorithm === 'layered')
+  {
+    var firstIds = null;
+    var lastIds = null;
+
+    if (Array.isArray(hints.startNodeIds) && hints.startNodeIds.length > 0)
+    {
+      firstIds = {};
+      for (var i = 0; i < hints.startNodeIds.length; i++) firstIds[hints.startNodeIds[i]] = true;
+    }
+
+    if (Array.isArray(hints.endNodeIds) && hints.endNodeIds.length > 0)
+    {
+      lastIds = {};
+      for (var i = 0; i < hints.endNodeIds.length; i++) lastIds[hints.endNodeIds[i]] = true;
+    }
+
+    if (firstIds == null && lastIds == null)
+    {
+      // Fallback: topological source/sink detection.
+      var incomingCount = {};
+      var outgoingCount = {};
+
+      for (var i = 0; i < elkGraph.children.length; i++)
+      {
+        incomingCount[elkGraph.children[i].id] = 0;
+        outgoingCount[elkGraph.children[i].id] = 0;
+      }
+
+      if (elkGraph.edges != null)
+      {
+        for (var i = 0; i < elkGraph.edges.length; i++)
+        {
+          var edge = elkGraph.edges[i];
+
+          if (edge.sources != null)
+          {
+            for (var s = 0; s < edge.sources.length; s++)
+            {
+              if (outgoingCount[edge.sources[s]] != null) outgoingCount[edge.sources[s]]++;
+            }
+          }
+
+          if (edge.targets != null)
+          {
+            for (var t = 0; t < edge.targets.length; t++)
+            {
+              if (incomingCount[edge.targets[t]] != null) incomingCount[edge.targets[t]]++;
+            }
+          }
+        }
+      }
+
+      firstIds = {};
+      lastIds = {};
+
+      for (var i = 0; i < elkGraph.children.length; i++)
+      {
+        var nid = elkGraph.children[i].id;
+        if (incomingCount[nid] === 0 && outgoingCount[nid] > 0) firstIds[nid] = true;
+        else if (outgoingCount[nid] === 0 && incomingCount[nid] > 0) lastIds[nid] = true;
+      }
+    }
+
+    for (var i = 0; i < elkGraph.children.length; i++)
+    {
+      var node = elkGraph.children[i];
+
+      if (firstIds != null && firstIds[node.id])
+      {
+        if (node.layoutOptions == null) node.layoutOptions = {};
+        node.layoutOptions['elk.layered.layering.layerConstraint'] = 'FIRST';
+      }
+      else if (lastIds != null && lastIds[node.id])
+      {
+        if (node.layoutOptions == null) node.layoutOptions = {};
+        node.layoutOptions['elk.layered.layering.layerConstraint'] = 'LAST';
+      }
+    }
+  }
+
+  new ELK().layout(elkGraph).then(function(result)
+  {
+    model.beginUpdate();
+
+    var committed = false;
+
+    try
+    {
+      layout.applyElkLayout(result);
+      committed = true;
+    }
+    catch (e)
+    {
+      // ELK application failed; model.endUpdate() in finally will
+      // unwind the partial changes cleanly.
+    }
+    finally
+    {
+      if (committed)
+      {
+        // Commit with morph animation — morph captures the current
+        // view state (pre-ELK positions) and animates to the new
+        // model state, calling endUpdate on DONE. On DONE we re-fit
+        // so the viewer's scale/translate match the new bounds;
+        // without this, a layered layout that grew taller than the
+        // original viewport clips on the sides.
+        var refit = function()
+        {
+          try
+          {
+            graph.fit(20);
+            graph.sizeDidChange();
+          }
+          catch (_) {}
+        };
+
+        try
+        {
+          var morph = new mxMorphing(graph);
+          morph.addListener(mxEvent.DONE, function()
+          {
+            model.endUpdate();
+            refit();
+            notifySize('postLayout');
+            done(true);
+          });
+          morph.startAnimation();
+        }
+        catch (e)
+        {
+          model.endUpdate();
+          refit();
+          notifySize('postLayout');
+          done(true);
+        }
+      }
+      else
+      {
+        model.endUpdate();
+        done(false);
+      }
+    }
+  }).catch(function(e)
+  {
+    done(false);
+  });
+}
+
+async function renderDiagram(xml, opts)
+{
+  opts = opts || {};
+
   try
   {
     await waitForGraphViewer();
@@ -454,6 +1127,8 @@ async function renderDiagram(xml)
       "dark-mode": "auto",
       nav: true,
       resize: true,
+      fit: true,
+      "max-width": "100%",
       toolbar: "zoom layers tags",
       xml: xml
     };
@@ -477,14 +1152,85 @@ async function renderDiagram(xml)
 
     if (graphDiv2 != null)
     {
+      // For post-stream renders, fade the viewer in instead of popping
+      // each cell (the stream already animated them).
+      if (opts.fadeIn)
+      {
+        graphDiv2.style.opacity = '0';
+      }
+
       GraphViewer.createViewerForElement(graphDiv2, function(viewer)
       {
         graphViewer = viewer;
 
-        // Intro animation: bounce vertices, wipe edges
-        if (viewer != null && viewer.graph != null)
+        if (opts.skipIntroAnim)
         {
+          // Mark intro as played so playViewerIntroAnimation is a no-op.
+          introAnimPlayed = true;
+        }
+        else if (viewer != null && viewer.graph != null)
+        {
+          // Intro animation: bounce vertices, wipe edges
           playViewerIntroAnimation(viewer.graph);
+        }
+
+        if (opts.fadeIn)
+        {
+          // Whole-viewer fade-in to handoff cleanly from the stream.
+          graphDiv2.style.transition = 'opacity 0.35s ease-out';
+          requestAnimationFrame(function()
+          {
+            graphDiv2.style.opacity = '1';
+            setTimeout(function()
+            {
+              graphDiv2.style.transition = '';
+            }, 400);
+          });
+        }
+
+        // Post-layout pass: the AI opts into a specific algorithm via
+        // the postLayout tool parameter (verticalFlow, horizontalFlow,
+        // tree, force, …) and we run that full re-layout. Otherwise
+        // the diagram renders as-is.
+        var autoAlgorithm = opts.postLayout || null;
+
+        if (autoAlgorithm && viewer != null && viewer.graph != null)
+        {
+          var delay = opts.fadeIn ? 450 : 50;
+          var layoutHints = { startNodeIds: opts.startNodeIds || null, endNodeIds: opts.endNodeIds || null };
+          setTimeout(function()
+          {
+            try
+            {
+              applyPostLayout(viewer.graph, autoAlgorithm, layoutHints, function(applied)
+              {
+                try
+                {
+                  if (applied)
+                  {
+                    var newXml = serializeGraphXml(viewer.graph);
+
+                    if (newXml != null)
+                    {
+                      currentXml = newXml;
+                      drawioEditUrl = generateDrawioEditUrl(newXml);
+                    }
+                  }
+                }
+                catch (e)
+                {
+                  // Keep the original on serialization failure.
+                }
+              });
+            }
+            catch (e)
+            {
+              if (typeof console !== 'undefined' && console.warn)
+              {
+                console.warn('[post-layout] error:', e);
+              }
+            }
+          }, delay);
         }
 
         notifySize('viewer-callback');
@@ -498,7 +1244,7 @@ async function renderDiagram(xml)
   }
   catch (e)
   {
-    showError("Failed to render diagram: " + e.message);
+    showError("Failed to render diagram: " + e.message, e);
   }
 }
 
@@ -967,33 +1713,89 @@ function flushCellAnimations(graph)
   });
 }
 
-/**
- * Smooth viewport during streaming: centers the entire diagram and
- * gradually zooms out as it grows. Scale clamped to [0.8, 1.0].
- * Uses lerp per partial-update call for smooth motion.
- */
-function streamFollowNewCells(graph)
+// --- Smart streaming camera ---
+//
+// Goal: keep the streaming preview inside a fixed visible viewport while
+// new cells stream in. The camera target is recomputed on each partial
+// (smart focus toward recently-added cells when they're a small subset)
+// and a critically-damped spring animates toward it on every rAF tick,
+// so the motion ease-outs naturally even between partials.
+
+// Maximum height for the streaming container. Caps growth so the iframe
+// stays in the user's chat viewport while the diagram fills in. Final
+// GraphViewer (post-stream) renders at natural size — see endStreaming.
+var STREAM_VIEWPORT_HEIGHT = 650;
+// Minimum height — avoids a tiny initial frame for trivial diagrams.
+var STREAM_VIEWPORT_MIN_HEIGHT = 320;
+// Padding around the focus rect, in container pixels.
+var STREAM_VIEWPORT_PADDING = 24;
+// How long a cell counts as "recently added" for focus weighting.
+// Long enough to keep the centroid stable when a single new arrival
+// would otherwise shift it dramatically — averaging across more
+// vertices smooths the panning.
+var STREAM_RECENT_CELL_TTL_MS = 1200;
+// Cap on the number of vertices considered "recent". Bigger set =
+// smoother centroid (less jitter when a vertex is added or expires)
+// but slightly wider focus rect.
+var STREAM_RECENT_VERTEX_LIMIT = 6;
+// How much extra zoom-in we'll allow when focusing on a small recent set,
+// expressed as a multiplier on the fit-whole scale. 1.0 = no extra zoom.
+var STREAM_RECENT_ZOOM_BOOST = 1.8;
+
+// Insertion-order queue of recent vertex additions: [{id, t}, ...].
+// We trim by both TTL and length cap so the camera only ever focuses on
+// the actual leading edge of new content. Cleared on endStreaming.
+var recentVertexQueue = [];
+
+function trackRecentCells(ids)
 {
-  // Compute model-space bounding box from cell geometries directly,
-  // not from getGraphBounds() which depends on current scale/translate
-  // and causes feedback wobble.
-  var model = graph.getModel();
-  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  var cellCount = 0;
+  if (ids == null || ids.length === 0) return;
+  var now = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() : Date.now();
 
-  for (var id in model.cells)
+  for (var i = 0; i < ids.length; i++)
   {
-    if (id === '0' || id === '1') continue;
+    recentVertexQueue.push({ id: ids[i], t: now });
+  }
 
-    var cell = model.cells[id];
+  // Cap length: keep only the last N additions.
+  if (recentVertexQueue.length > STREAM_RECENT_VERTEX_LIMIT)
+  {
+    recentVertexQueue = recentVertexQueue.slice(-STREAM_RECENT_VERTEX_LIMIT);
+  }
+}
 
-    if (!cell.visible) continue;
+// Camera animator state. The spring runs in log-space for scale (so
+// 0.5→1.0 feels like 1.0→2.0) and linear for tx/ty.
+var cameraTarget = null;     // { scale, tx, ty }
+var cameraVelocity = { logScale: 0, tx: 0, ty: 0 };
+var cameraAnimRaf = null;
+var cameraAnimLastT = 0;
+var cameraAnimGraph = null;
+// Slightly overdamped spring: zeta > 1 guarantees no overshoot, even
+// when the target keeps shrinking during streaming and the spring has
+// accumulated zoom-out velocity (which would otherwise carry it past
+// the final scale before settling back). Omega bumped a touch to keep
+// the response feeling snappy despite the extra damping.
+var CAMERA_SPRING_OMEGA = 10.0;
+var CAMERA_SPRING_ZETA = 1.25;
 
+/**
+ * Compute the bbox of cells (in model-space, with parent offsets) from
+ * an array of cell IDs. Returns null when no usable geometry was found.
+ */
+function computeCellsBBox(model, ids)
+{
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  var any = false;
+
+  for (var i = 0; i < ids.length; i++)
+  {
+    var cell = model.getCell(ids[i]);
+    if (cell == null || !cell.visible) continue;
     var geo = cell.geometry;
-
     if (geo == null || geo.relative) continue;
 
-    // Accumulate parent offsets for contained cells
     var ox = 0, oy = 0;
     var p = model.getParent(cell);
 
@@ -1013,96 +1815,351 @@ function streamFollowNewCells(graph)
     var x2 = x1 + (geo.width || 0);
     var y2 = y1 + (geo.height || 0);
 
-    minX = Math.min(minX, x1);
-    minY = Math.min(minY, y1);
-    maxX = Math.max(maxX, x2);
-    maxY = Math.max(maxY, y2);
-    cellCount++;
+    if (x1 < minX) minX = x1;
+    if (y1 < minY) minY = y1;
+    if (x2 > maxX) maxX = x2;
+    if (y2 > maxY) maxY = y2;
+    any = true;
   }
 
-  if (cellCount === 0) return;
+  if (!any) return null;
+  return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+}
 
-  var uw = maxX - minX;
-  var uh = maxY - minY;
-
-  if (uw <= 0 && uh <= 0) return;
-
-  var padding = 20;
-  var cw = containerEl.clientWidth;
-  var ch = containerEl.clientHeight;
-
-  if (cw <= 0 || ch <= 0) return;
-
-  // Scale to fit width, clamped to [0.1, 1.0]
-  var fitScaleW = (cw - padding * 2) / Math.max(uw, 1);
-  var targetScale = Math.min(fitScaleW, 1);
-  targetScale = Math.max(targetScale, 0.1);
-
-  // Dynamically grow the streaming container to fit the diagram at this scale
-  var neededH = Math.ceil(uh * targetScale + padding * 2);
-  var streamH = Math.max(400, neededH);
-
-  if (ch < streamH)
+/**
+ * Compute the bbox of all visible cells in the graph model.
+ */
+function computeWholeBBox(model)
+{
+  var ids = [];
+  for (var id in model.cells)
   {
-    containerEl.style.height = streamH + 'px';
-    ch = streamH;
+    if (id === '0' || id === '1') continue;
+    ids.push(id);
+  }
+  return computeCellsBBox(model, ids);
+}
+
+/**
+ * Given a target rect in model space (inflated with padding) and the
+ * container size in pixels, return { scale, tx, ty } that fits it
+ * centered, with scale clamped to [0.1, 1.0].
+ */
+function fitRectToContainer(rect, cw, ch)
+{
+  var rw = Math.max(rect.maxX - rect.minX, 1);
+  var rh = Math.max(rect.maxY - rect.minY, 1);
+  var availW = Math.max(cw - STREAM_VIEWPORT_PADDING * 2, 1);
+  var availH = Math.max(ch - STREAM_VIEWPORT_PADDING * 2, 1);
+
+  var scale = Math.min(availW / rw, availH / rh, 1);
+  scale = Math.max(scale, 0.1);
+
+  var cx = (rect.minX + rect.maxX) / 2;
+  var cy = (rect.minY + rect.maxY) / 2;
+  var tx = (cw / scale) / 2 - cx;
+  var ty = (ch / scale) / 2 - cy;
+
+  return { scale: scale, tx: tx, ty: ty };
+}
+
+/**
+ * Decide where the camera should be aiming right now. Strategy:
+ *
+ *  - Always size the streaming container at STREAM_VIEWPORT_HEIGHT (or
+ *    less when the diagram naturally fits smaller). Width is fixed by
+ *    layout.
+ *  - "Whole" target = fit-bbox of all cells, padded.
+ *  - "Hot" target = fit-bbox of cells added in the last
+ *    STREAM_RECENT_CELL_TTL_MS, expanded slightly so we keep some
+ *    spatial context around them.
+ *  - When recent cells span most of the diagram (recent_area / whole_area
+ *    > 0.6), the hot view collapses into the whole view; the bias has no
+ *    effect.
+ *  - Otherwise blend toward the hot view: lerp center and (clamped)
+ *    scale. The blend factor decays with the recent/whole area ratio so
+ *    a single new node gets full focus and a flurry of new nodes barely
+ *    nudges the camera.
+ */
+function computeStreamCameraTarget(graph)
+{
+  var model = graph.getModel();
+  var wholeBox = computeWholeBBox(model);
+
+  if (wholeBox == null) return null;
+
+  // Choose container height: cap at STREAM_VIEWPORT_HEIGHT, but shrink
+  // for tiny diagrams that fit smaller without zooming below 100%.
+  var cw = containerEl.clientWidth;
+  if (cw <= 0) return null;
+
+  var wholeW = Math.max(wholeBox.maxX - wholeBox.minX, 1);
+  var wholeH = Math.max(wholeBox.maxY - wholeBox.minY, 1);
+
+  // Height that would let the whole diagram fit at its width-fit scale,
+  // capped at STREAM_VIEWPORT_HEIGHT and floored at the minimum.
+  var widthFitScale = Math.min((cw - STREAM_VIEWPORT_PADDING * 2) / wholeW, 1);
+  var naturalH = Math.ceil(wholeH * widthFitScale + STREAM_VIEWPORT_PADDING * 2);
+  var desiredH = Math.max(STREAM_VIEWPORT_MIN_HEIGHT,
+                          Math.min(naturalH, STREAM_VIEWPORT_HEIGHT));
+
+  if (Math.abs(containerEl.clientHeight - desiredH) > 1)
+  {
+    containerEl.style.height = desiredH + 'px';
 
     if (app.sendSizeChanged)
     {
-      app.sendSizeChanged({ width: cw, height: streamH });
+      app.sendSizeChanged({ width: cw, height: desiredH });
     }
   }
 
-  // Translate to show the "active" part of the diagram:
-  // - Horizontally: center the diagram
-  // - Vertically: show the bottom edge (where new cells appear),
-  //   keeping some padding. If the diagram fits vertically, center it.
-  var cx = (minX + maxX) / 2;
-  var viewH = ch / targetScale;
-  var viewW = cw / targetScale;
-  var targetTx = viewW / 2 - cx;
+  var ch = desiredH;
 
-  var targetTy;
+  // Whole-fit camera target.
+  var paddedWhole = {
+    minX: wholeBox.minX, minY: wholeBox.minY,
+    maxX: wholeBox.maxX, maxY: wholeBox.maxY
+  };
+  var wholeView = fitRectToContainer(paddedWhole, cw, ch);
 
-  if (uh <= viewH - padding * 2 / targetScale)
+  // Collect recent vertex IDs (within TTL). Iterate the queue in
+  // insertion order; expire stale entries by trimming from the front.
+  var now = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now() : Date.now();
+  var firstAlive = 0;
+
+  while (firstAlive < recentVertexQueue.length &&
+         now - recentVertexQueue[firstAlive].t > STREAM_RECENT_CELL_TTL_MS)
   {
-    // Diagram fits vertically — center it
-    var cy = (minY + maxY) / 2;
-    targetTy = viewH / 2 - cy;
+    firstAlive++;
+  }
+
+  if (firstAlive > 0) recentVertexQueue = recentVertexQueue.slice(firstAlive);
+
+  var recentIds = [];
+  for (var rq = 0; rq < recentVertexQueue.length; rq++)
+  {
+    recentIds.push(recentVertexQueue[rq].id);
+  }
+
+  if (recentIds.length === 0) return wholeView;
+
+  var recentBox = computeCellsBBox(model, recentIds);
+  if (recentBox == null) return wholeView;
+
+  // Inflate the recent bbox to keep some spatial context visible.
+  var inflate = Math.max(wholeW, wholeH) * 0.15;
+  var paddedRecent = {
+    minX: recentBox.minX - inflate, minY: recentBox.minY - inflate,
+    maxX: recentBox.maxX + inflate, maxY: recentBox.maxY + inflate
+  };
+
+  // Don't focus tighter than the whole bbox itself — clip to it so we
+  // never pan outside the diagram.
+  paddedRecent.minX = Math.max(paddedRecent.minX, wholeBox.minX);
+  paddedRecent.minY = Math.max(paddedRecent.minY, wholeBox.minY);
+  paddedRecent.maxX = Math.min(paddedRecent.maxX, wholeBox.maxX);
+  paddedRecent.maxY = Math.min(paddedRecent.maxY, wholeBox.maxY);
+
+  var recentView = fitRectToContainer(paddedRecent, cw, ch);
+
+  // Blend factor: focus on recent when it's a small portion of the
+  // diagram, fade to whole-fit as it grows. Capped at 0.75 so the
+  // camera always keeps a fair amount of context visible (less twitchy
+  // than a full 0.9 lock onto the hot region).
+  var wholeArea = wholeW * wholeH;
+  var recentArea = Math.max(recentBox.maxX - recentBox.minX, 1) *
+                   Math.max(recentBox.maxY - recentBox.minY, 1);
+  var ratio = Math.min(recentArea / Math.max(wholeArea, 1), 1);
+  var blend = Math.max(0, 0.75 * (1 - ratio / 0.75));   // 0..0.75
+
+  // Cap the focus zoom so we don't lose context — never more than
+  // STREAM_RECENT_ZOOM_BOOST × the whole-fit scale.
+  var maxScale = Math.min(wholeView.scale * STREAM_RECENT_ZOOM_BOOST, 1);
+  var blendedScale = wholeView.scale +
+                     (Math.min(recentView.scale, maxScale) - wholeView.scale) * blend;
+
+  // Lerp center; convert (tx, ty) back from blended scale.
+  var wholeCx = (wholeBox.minX + wholeBox.maxX) / 2;
+  var wholeCy = (wholeBox.minY + wholeBox.maxY) / 2;
+  var recentCx = (recentBox.minX + recentBox.maxX) / 2;
+  var recentCy = (recentBox.minY + recentBox.maxY) / 2;
+  var cx = wholeCx + (recentCx - wholeCx) * blend;
+  var cy = wholeCy + (recentCy - wholeCy) * blend;
+
+  return {
+    scale: blendedScale,
+    tx: (cw / blendedScale) / 2 - cx,
+    ty: (ch / blendedScale) / 2 - cy
+  };
+}
+
+/**
+ * rAF tick: advance critically-damped spring on (logScale, tx, ty)
+ * toward cameraTarget and apply to the graph view. Reschedules itself
+ * until the camera is at rest (within thresholds).
+ */
+function cameraAnimTick(now)
+{
+  cameraAnimRaf = null;
+
+  if (cameraAnimGraph == null || cameraTarget == null) return;
+
+  var dt = (cameraAnimLastT > 0) ? Math.min((now - cameraAnimLastT) / 1000, 0.05) : 0.016;
+  cameraAnimLastT = now;
+
+  var view = cameraAnimGraph.view;
+  var curScale = view.scale;
+  var curTx = view.translate.x;
+  var curTy = view.translate.y;
+
+  var curLog = Math.log(Math.max(curScale, 0.0001));
+  var tgtLog = Math.log(Math.max(cameraTarget.scale, 0.0001));
+
+  // Damped spring: a = omega^2 * (target-pos) - 2*zeta*omega*vel
+  // Slightly overdamped (zeta > 1) so a chasing target with built-up
+  // velocity can never overshoot when the target finally settles.
+  var omega = CAMERA_SPRING_OMEGA;
+  var omega2 = omega * omega;
+  var damp = 2 * CAMERA_SPRING_ZETA * omega;
+
+  cameraVelocity.logScale += (omega2 * (tgtLog - curLog) - damp * cameraVelocity.logScale) * dt;
+  cameraVelocity.tx       += (omega2 * (cameraTarget.tx - curTx) - damp * cameraVelocity.tx) * dt;
+  cameraVelocity.ty       += (omega2 * (cameraTarget.ty - curTy) - damp * cameraVelocity.ty) * dt;
+
+  var newLog = curLog + cameraVelocity.logScale * dt;
+  var newScale = Math.exp(newLog);
+  var newTx = curTx + cameraVelocity.tx * dt;
+  var newTy = curTy + cameraVelocity.ty * dt;
+
+  // Snap when within thresholds AND velocity is small.
+  var atScale = Math.abs(newScale - cameraTarget.scale) < 0.003 &&
+                Math.abs(cameraVelocity.logScale) < 0.05;
+  var atTx = Math.abs(newTx - cameraTarget.tx) < 0.5 &&
+             Math.abs(cameraVelocity.tx) < 1;
+  var atTy = Math.abs(newTy - cameraTarget.ty) < 0.5 &&
+             Math.abs(cameraVelocity.ty) < 1;
+
+  if (atScale) { newScale = cameraTarget.scale; cameraVelocity.logScale = 0; }
+  if (atTx)    { newTx = cameraTarget.tx;       cameraVelocity.tx = 0; }
+  if (atTy)    { newTy = cameraTarget.ty;       cameraVelocity.ty = 0; }
+
+  // Skip the apply if nothing visibly changed (avoids redundant SVG
+  // matrix updates).
+  if (newScale !== curScale || newTx !== curTx || newTy !== curTy)
+  {
+    view.scaleAndTranslate(newScale, newTx, newTy);
+  }
+
+  // Keep ticking until at rest.
+  if (!(atScale && atTx && atTy))
+  {
+    cameraAnimRaf = requestAnimationFrame(cameraAnimTick);
   }
   else
   {
-    // Diagram taller than viewport — show bottom edge with padding
-    var bottomPad = padding / targetScale;
-    targetTy = viewH - bottomPad - maxY;
+    cameraAnimLastT = 0;
+  }
+}
+
+function ensureCameraAnimRunning(graph)
+{
+  cameraAnimGraph = graph;
+
+  if (cameraAnimRaf == null)
+  {
+    cameraAnimLastT = 0;
+    cameraAnimRaf = requestAnimationFrame(cameraAnimTick);
+  }
+}
+
+function stopCameraAnim()
+{
+  if (cameraAnimRaf != null)
+  {
+    cancelAnimationFrame(cameraAnimRaf);
+    cameraAnimRaf = null;
   }
 
-  var curScale = graph.view.scale;
-  var curTx = graph.view.translate.x;
-  var curTy = graph.view.translate.y;
+  cameraAnimGraph = null;
+  cameraTarget = null;
+  cameraVelocity.logScale = 0;
+  cameraVelocity.tx = 0;
+  cameraVelocity.ty = 0;
+  cameraAnimLastT = 0;
+}
 
-  // Skip if barely changed
-  var dScale = Math.abs(curScale - targetScale);
-  var dTx = Math.abs(curTx - targetTx) * targetScale;
-  var dTy = Math.abs(curTy - targetTy) * targetScale;
+/**
+ * Public entry point called after each merge. Recomputes the camera
+ * target (smart focus toward recently-added cells) and ensures the
+ * spring animator is running. The animator keeps ticking between
+ * partials, so motion eases out smoothly even when the LLM pauses.
+ */
+function streamFollowNewCells(graph)
+{
+  var target = computeStreamCameraTarget(graph);
+  if (target == null) return;
 
-  if (dScale < 0.005 && dTx < 2 && dTy < 2) return;
+  cameraTarget = target;
 
-  // Lerp toward target each call. Since partials arrive ~30ms apart,
-  // a factor of 0.15 gives smooth ~200ms convergence without needing
-  // rAF animations that get cancelled by the next partial.
-  var lerpFactor = 0.15;
+  // First time: snap scale into a reasonable range so we don't start
+  // from the default scale=1, translate=0,0 and zip across the screen.
+  if (graph.view.scale === 1 && graph.view.translate.x === 0 &&
+      graph.view.translate.y === 0)
+  {
+    // Start at a slightly lower scale than the target for a subtle
+    // "zoom-in-as-it-renders" feel, capped at the target so we don't
+    // start zoomed in.
+    var startScale = Math.max(target.scale * 0.85, 0.1);
+    graph.view.scaleAndTranslate(startScale, target.tx, target.ty);
+  }
 
-  var newScale = curScale + (targetScale - curScale) * lerpFactor;
-  var newTx = curTx + (targetTx - curTx) * lerpFactor;
-  var newTy = curTy + (targetTy - curTy) * lerpFactor;
+  ensureCameraAnimRunning(graph);
+}
 
-  // Snap if very close to target
-  if (Math.abs(newScale - targetScale) < 0.005) newScale = targetScale;
-  if (Math.abs(newTx - targetTx) < 1) newTx = targetTx;
-  if (Math.abs(newTy - targetTy) < 1) newTy = targetTy;
+/**
+ * Smooth handoff from the streaming Graph to the final GraphViewer.
+ *
+ * - Clears the recent-vertex queue so the camera target snaps back to
+ *   fit-whole — the spring then animates the streamGraph from "zoomed
+ *   in on the leading edge" out to the full diagram in parallel with
+ *   the fade-out, so the user sees the camera pull back as the stream
+ *   dissolves into the viewer.
+ * - Fades out the streamGraph (350 ms) while the GraphViewer renders
+ *   underneath at fit-whole (matching scale, no jump on swap).
+ * - Skips the viewer's intro pop animation since the stream already
+ *   showed every cell appearing.
+ *
+ * renderFn is called after the fade completes; it must call
+ * renderDiagram(xml, { skipIntroAnim: true, fadeIn: true }).
+ */
+function transitionToFinalView(renderFn)
+{
+  if (streamGraph == null)
+  {
+    renderFn();
+    return;
+  }
 
-  graph.view.scaleAndTranslate(newScale, newTx, newTy);
+  // Pull camera back to fit-whole during the fade. The smart-camera
+  // target recomputes on each rAF tick of the spring, so emptying the
+  // recent queue immediately retargets to the whole diagram.
+  recentVertexQueue = [];
+
+  var streamDiv = containerEl.firstElementChild;
+
+  if (streamDiv != null)
+  {
+    streamDiv.style.transition = 'opacity 0.35s ease-out';
+    streamDiv.style.opacity = '0';
+  }
+
+  pendingToolInputTimer = setTimeout(function()
+  {
+    pendingToolInputTimer = null;
+    endStreaming();
+    renderFn();
+  }, 350);
 }
 
 /**
@@ -1127,6 +2184,9 @@ function endStreaming()
     deferredAnimTimer = null;
   }
 
+  stopCameraAnim();
+  recentVertexQueue = [];
+
   if (streamGraph != null)
   {
     streamGraph.destroy();
@@ -1138,13 +2198,167 @@ function endStreaming()
   containerEl.classList.remove("streaming");
   containerEl.style.height = '';
   streamingInitialized = false;
-
+  lastMergedMermaidText = null;
 }
 
 // --- Streaming: incremental rendering as the LLM generates XML ---
 
+/**
+ * Show the raw mermaid text in the <pre> preview element. Used as the
+ * fallback when the parser can't yet make sense of the partial input.
+ */
+function showMermaidTextPreview(partialMermaid)
+{
+  loadingEl.style.display = 'none';
+  mermaidPreviewEl.style.display = 'block';
+  mermaidPreviewEl.textContent = partialMermaid;
+  containerEl.style.display = 'none';
+  toolbarEl.style.display = 'none';
+  mermaidPreviewEl.scrollTop = mermaidPreviewEl.scrollHeight;
+
+  if (app.sendSizeChanged)
+  {
+    var el = document.documentElement;
+    app.sendSizeChanged({ width: Math.ceil(el.scrollWidth), height: Math.ceil(el.scrollHeight) });
+  }
+}
+
+/**
+ * Handle a mermaid partial: heal the text to a parseable prefix, run
+ * parseText, stabilize IDs, and merge into the streaming Graph. On
+ * any failure (viewer not loaded, parse error, unsupported type), fall
+ * back to the raw-text preview as long as we haven't already started
+ * rendering a graph for this stream.
+ */
+function handleMermaidPartial(partialMermaid)
+{
+  // Need the viewer + parser before we can render anything
+  if (typeof Graph === 'undefined' || typeof mxUtils === 'undefined' ||
+      typeof mxMermaidToDrawio === 'undefined' ||
+      typeof mxMermaidToDrawio.parseText !== 'function')
+  {
+    if (!streamingInitialized) showMermaidTextPreview(partialMermaid);
+    return;
+  }
+
+  var healed = healMermaidText(partialMermaid);
+
+  if (healed == null)
+  {
+    if (!streamingInitialized) showMermaidTextPreview(partialMermaid);
+    return;
+  }
+
+  // De-dupe: if this healed text is byte-identical to what we last merged,
+  // parseText would produce the same XML and the merge would be a no-op.
+  if (healed === lastMergedMermaidText) return;
+
+  var xml;
+  try
+  {
+    xml = mxMermaidToDrawio.parseText(healed, {
+      theme: (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'default'
+    });
+  }
+  catch (e)
+  {
+    if (!streamingInitialized) showMermaidTextPreview(partialMermaid);
+    return;
+  }
+
+  if (xml == null)
+  {
+    if (!streamingInitialized) showMermaidTextPreview(partialMermaid);
+    return;
+  }
+
+  xml = stabilizeMermaidIds(xml);
+
+  // Hand off to the same merge pipeline used by XML streaming.
+  try
+  {
+    var xmlDoc = mxUtils.parseXml(xml);
+    var xmlNode = xmlDoc.documentElement;
+
+    if (!streamingInitialized)
+    {
+      // First parseable chunk — switch from text preview to live graph
+      streamingInitialized = true;
+      introAnimPlayed = false;
+      mermaidPreviewEl.style.display = 'none';
+      containerEl.innerHTML = "";
+      containerEl.classList.add("streaming");
+
+      var graphDiv = document.createElement("div");
+      graphDiv.style.width = "100%";
+      graphDiv.style.height = "100%";
+      graphDiv.style.overflow = "hidden";
+      containerEl.appendChild(graphDiv);
+
+      loadingEl.style.display = "none";
+      containerEl.style.display = "block";
+
+      streamGraph = new Graph(graphDiv);
+      streamGraph.setEnabled(false);
+      streamPendingEdges = [];
+
+      var prevIds = getModelCellIds(streamGraph.getModel());
+      streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
+      var newIds = findNewCellIds(streamGraph.getModel(), prevIds);
+
+      // Track recent VERTEX additions for the smart camera. Edges can
+      // span the full diagram and would bloat the focus bbox, defeating
+      // the close-up. Pop animation still uses all top-level cells.
+      var topNewIds = filterTopLevelCellIds(streamGraph, newIds);
+      trackRecentCells(filterVertexCellIds(streamGraph, topNewIds));
+
+      // Only pop-animate top-level cells (parent === '1'). Nested cells
+      // (row containers, column cells) appear with their parent so the
+      // pop is one unified motion instead of many overlapping scale-ups.
+      if (topNewIds.length > 0) queueCellAnimation(streamGraph, topNewIds);
+
+      // streamFollowNewCells sets the container height + sends the
+      // size update based on the smart-camera target — no manual call.
+      streamFollowNewCells(streamGraph);
+    }
+    else if (streamGraph != null)
+    {
+      var prevIds2 = getModelCellIds(streamGraph.getModel());
+      streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
+      var newIds2 = findNewCellIds(streamGraph.getModel(), prevIds2);
+
+      var topNewIds2 = filterTopLevelCellIds(streamGraph, newIds2);
+      trackRecentCells(filterVertexCellIds(streamGraph, topNewIds2));
+      if (topNewIds2.length > 0) queueCellAnimation(streamGraph, topNewIds2);
+
+      if (pendingAnimCellIds.length > 0 && animDebounceTimer == null)
+      {
+        queueCellAnimation(streamGraph, []);
+      }
+
+      streamFollowNewCells(streamGraph);
+    }
+
+    lastMergedMermaidText = healed;
+  }
+  catch (e)
+  {
+    // Keep the last good graph on screen; next tick may succeed.
+  }
+}
+
 app.ontoolinputpartial = function(params)
 {
+  // Mermaid streaming
+  var partialMermaid = params.arguments && params.arguments.mermaid;
+
+  if (partialMermaid != null && typeof partialMermaid === 'string')
+  {
+    handleMermaidPartial(partialMermaid);
+    return;
+  }
+
+  // XML streaming path
   var partialXml = params.arguments && params.arguments.xml;
 
   if (partialXml == null || typeof partialXml !== 'string')
@@ -1204,17 +2418,16 @@ app.ontoolinputpartial = function(params)
       streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
       var newIds = findNewCellIds(streamGraph.getModel(), prevIds);
 
+      var topNew = filterTopLevelCellIds(streamGraph, newIds);
+      trackRecentCells(filterVertexCellIds(streamGraph, topNew));
+
       if (newIds.length > 0)
       {
         queueCellAnimation(streamGraph, newIds);
       }
 
-      // Notify size with fixed streaming height
-      if (app.sendSizeChanged)
-      {
-        app.sendSizeChanged({ width: containerEl.clientWidth, height: 400 });
-      }
-
+      // streamFollowNewCells sets the container height + sends the
+      // size update based on the smart-camera target — no manual call.
       streamFollowNewCells(streamGraph);
     }
     else if (streamGraph != null)
@@ -1223,6 +2436,9 @@ app.ontoolinputpartial = function(params)
       var prevIds = getModelCellIds(streamGraph.getModel());
       streamPendingEdges = streamMergeXmlDelta(streamGraph, streamPendingEdges, xmlNode);
       var newIds = findNewCellIds(streamGraph.getModel(), prevIds);
+
+      var topNew2 = filterTopLevelCellIds(streamGraph, newIds);
+      trackRecentCells(filterVertexCellIds(streamGraph, topNew2));
 
       if (newIds.length > 0)
       {
@@ -1235,23 +2451,53 @@ app.ontoolinputpartial = function(params)
         queueCellAnimation(streamGraph, []);
       }
 
-      // Smooth viewport: center diagram, zoom out as it grows
+      // Smart camera: focus on recent cells, fit-to-viewport, smooth spring
       streamFollowNewCells(streamGraph);
     }
   }
   catch (e)
   {
-    // Ignore parse errors from partial XML - next partial may fix it
-    if (typeof console !== 'undefined')
-    {
-      console.debug('Partial XML parse/merge error:', e.message);
-    }
+    // Ignore parse errors from partial XML — next partial may fix it.
   }
 };
 
 app.ontoolinput = function(params)
 {
-  var xml = params.arguments && params.arguments.xml;
+  var args = (params && params.arguments) || {};
+  var postLayout = args.postLayout || null;
+  var startNodeIds = args.startNodeIds || null;
+  var endNodeIds = args.endNodeIds || null;
+  var layoutOpts = { skipIntroAnim: true, fadeIn: true, postLayout: postLayout, startNodeIds: startNodeIds, endNodeIds: endNodeIds };
+
+  var mermaidText = args.mermaid;
+
+  if (mermaidText != null && typeof mermaidText === 'string')
+  {
+    transitionToFinalView(function()
+    {
+      mermaidPreviewEl.style.display = 'none';
+      loadingEl.style.display = 'flex';
+      loadingEl.innerHTML = '<div class="spinner"></div>Converting Mermaid diagram...';
+
+      waitForGraphViewer()
+        .then(function()
+        {
+          return convertMermaidToXml(mermaidText);
+        })
+        .then(function(xml)
+        {
+          return renderDiagram(xml, layoutOpts);
+        })
+        .catch(function(e)
+        {
+          showError("Failed to convert Mermaid diagram: " + e.message);
+        });
+    });
+
+    return;
+  }
+
+  var xml = args.xml;
 
   if (xml == null || typeof xml !== 'string')
   {
@@ -1265,32 +2511,13 @@ app.ontoolinput = function(params)
 
   try
   {
-    // Crossfade: fade out streaming graph, then render final
-    var streamContainer = containerEl.querySelector(':first-child');
-
-    if (streamContainer != null && streamGraph != null)
+    transitionToFinalView(function()
     {
-      streamContainer.style.transition = 'opacity 0.3s ease-out';
-      streamContainer.style.opacity = '0';
-
-      pendingToolInputTimer = setTimeout(function()
-      {
-        pendingToolInputTimer = null;
-        endStreaming();
-        renderDiagram(xml).catch(function(e)
-        {
-          showError("Failed to render diagram: " + e.message);
-        });
-      }, 300);
-    }
-    else
-    {
-      endStreaming();
-      renderDiagram(xml).catch(function(e)
+      renderDiagram(xml, layoutOpts).catch(function(e)
       {
         showError("Failed to render diagram: " + e.message);
       });
-    }
+    });
   }
   catch (e)
   {
@@ -1309,10 +2536,9 @@ app.ontoolresult = function(result)
 
   var textBlock = result.content && result.content.find(function(c) { return c.type === "text"; });
 
-  endStreaming();
-
   if (result.isError)
   {
+    endStreaming();
     var errorMsg = (textBlock && textBlock.text) ? textBlock.text : "Unknown error";
     showError("Tool error: " + errorMsg);
     return;
@@ -1320,23 +2546,87 @@ app.ontoolresult = function(result)
 
   if (textBlock && textBlock.type === "text")
   {
-    var normalizedXml = normalizeDiagramXml(textBlock.text);
+    // Unified payload: {xml|mermaid, postLayout, startNodeIds, endNodeIds, _version} as JSON.
+    // Fall back to treating the raw text as XML if JSON parsing fails.
+    var mermaidText = null;
+    var xmlText = null;
+    var postLayout = null;
+    var startNodeIds = null;
+    var endNodeIds = null;
 
-    if (normalizedXml)
+    try
     {
-      renderDiagram(normalizedXml).catch(function(e)
+      var parsed = JSON.parse(textBlock.text);
+
+      if (parsed && typeof parsed.mermaid === 'string')
       {
-        showError("Failed to render diagram: " + e.message);
+        mermaidText = parsed.mermaid;
+        postLayout = parsed.postLayout || null;
+        startNodeIds = parsed.startNodeIds || null;
+        endNodeIds = parsed.endNodeIds || null;
+      }
+      else if (parsed && typeof parsed.xml === 'string')
+      {
+        xmlText = parsed.xml;
+        postLayout = parsed.postLayout || null;
+        startNodeIds = parsed.startNodeIds || null;
+        endNodeIds = parsed.endNodeIds || null;
+      }
+    }
+    catch (e)
+    {
+      // Not JSON — treat the raw text as XML
+    }
+
+    var layoutOpts = { skipIntroAnim: true, fadeIn: true, postLayout: postLayout, startNodeIds: startNodeIds, endNodeIds: endNodeIds };
+
+    if (mermaidText != null)
+    {
+      transitionToFinalView(function()
+      {
+        mermaidPreviewEl.style.display = 'none';
+
+        waitForGraphViewer()
+          .then(function()
+          {
+            return convertMermaidToXml(mermaidText);
+          })
+          .then(function(xml)
+          {
+            return renderDiagram(xml, layoutOpts);
+          })
+          .catch(function(e)
+          {
+            showError("Failed to convert Mermaid diagram: " + e.message);
+          });
       });
     }
     else
     {
-      var inputPreview = textBlock.text.substring(0, 200);
-      showError(invalidDiagramXmlMessage + "\\n\\nReceived (first 200 chars): " + inputPreview);
+      var rawXml = xmlText != null ? xmlText : textBlock.text;
+      var normalizedXml = normalizeDiagramXml(rawXml);
+
+      if (normalizedXml)
+      {
+        transitionToFinalView(function()
+        {
+          renderDiagram(normalizedXml, layoutOpts).catch(function(e)
+          {
+            showError("Failed to render diagram: " + e.message);
+          });
+        });
+      }
+      else
+      {
+        endStreaming();
+        var inputPreview = rawXml.substring(0, 200);
+        showError(invalidDiagramXmlMessage + "\\n\\nReceived (first 200 chars): " + inputPreview);
+      }
     }
   }
   else
   {
+    endStreaming();
     var blockTypes = result.content
       ? result.content.map(function(c) { return c.type; }).join(", ")
       : "none";
@@ -1966,13 +3256,14 @@ function searchShapes(shapeIndex, tagMap, query, limit)
  * @param {object} [options] - Options.
  * @param {string} [options.domain] - Widget domain for ChatGPT sandbox rendering (e.g. "https://mcp.draw.io").
  * @param {string} [options.xmlReference] - XML generation reference text for the tool description.
+ * @param {string} [options.mermaidReference] - Mermaid syntax reference text appended to the tool description.
  * @param {Array} [options.shapeIndex] - Shape search index array from search-index.json.
  * @param {object} [options.serverOptions] - Optional McpServer constructor options (e.g. jsonSchemaValidator).
  * @returns {McpServer}
  */
 export function createServer(html, options = {})
 {
-  const { domain, xmlReference = "", shapeIndex = null, serverOptions = {} } = typeof options === "object" && options !== null
+  const { domain, xmlReference = "", mermaidReference = "", shapeIndex = null, serverOptions = {} } = typeof options === "object" && options !== null
     ? options
     : { serverOptions: options };
   const server = new McpServer(
@@ -1988,15 +3279,91 @@ export function createServer(html, options = {})
     {
       title: "Create Diagram",
       description:
-        "Creates and displays an interactive draw.io diagram. Pass draw.io XML (mxGraphModel format) to render it inline. " +
-        "IMPORTANT: The XML must be well-formed. Do NOT include ANY XML comments (<!-- -->) in the output — they are strictly forbidden.\n\n" +
-        xmlReference,
+        "Creates and displays an interactive draw.io diagram. Accepts either draw.io XML or Mermaid.js syntax — provide exactly one.\n\n" +
+        "**Use Mermaid** for the following diagram types (all rendered natively, no upstream mermaid runtime):\n" +
+        "  - flowchart / graph (TD, LR, …)\n" +
+        "  - sequenceDiagram\n" +
+        "  - classDiagram\n" +
+        "  - stateDiagram / stateDiagram-v2\n" +
+        "  - erDiagram\n" +
+        "  - gantt\n" +
+        "  - pie\n" +
+        "  - journey (user-journey)\n" +
+        "  - gitGraph\n" +
+        "  - mindmap\n" +
+        "  - timeline\n" +
+        "  - quadrantChart\n" +
+        "  - xychart-beta\n" +
+        "  - sankey-beta\n" +
+        "  - requirementDiagram\n" +
+        "  - C4Context / C4Container / C4Component\n" +
+        "  - block-beta\n" +
+        "  - architecture-beta\n" +
+        "  - packet-beta\n" +
+        "  - kanban\n" +
+        "  - radar-beta\n" +
+        "  - treemap-beta\n" +
+        "  - treeview-beta (draw.io-specific)\n" +
+        "  - venn (draw.io-specific) — syntax: `venn` then `set A [\"Label\"]` for each set, `union A,B` for declared overlaps (informational), and `text A` / `text A,B` followed by `[\"Region label\"]` for text inside a region. Do NOT use `A AND B[...]` or `A[\"...\"]` shorthand — those lines are ignored.\n" +
+        "  - ishikawa (draw.io-specific)\n" +
+        "  - zenuml\n" +
+        "**Strong default: use Mermaid for every diagram type on that list above.** Mermaid is simpler, more reliable, and the native Mermaid layout handles positioning and routing for you. For a flowchart, state diagram, sequence, ER, class, gantt, gitGraph, mindmap, etc. — reach for the `mermaid` parameter, not `xml`. Do not default to XML for flowcharts.\n\n" +
+        "**Use XML** when the diagram type isn't on the Mermaid list above OR when the user explicitly asks for XML / draw.io format. Typical cases where XML is the right choice:\n" +
+        "- **UI mockups / wireframes / screen designs** — buttons, form fields, sidebars, modal dialogs (`shape=mxgraph.bootstrap.*`, `shape=mxgraph.ios.*`, `shape=mxgraph.android.*`)\n" +
+        "- **Floor plans / seating charts / room layouts** — rooms, doors, furniture (`shape=mxgraph.floorplan.*`)\n" +
+        "- **Cloud architecture** with AWS / Azure / GCP / Kubernetes icons (`shape=mxgraph.aws4.*`, `shape=mxgraph.azure.*`, `shape=mxgraph.gcp2.*`, `shape=mxgraph.kubernetes.*`)\n" +
+        "- **Network topology** with Cisco / Rack / networking shapes (`shape=mxgraph.cisco*.*`, `shape=mxgraph.rack.*`, `shape=mxgraph.networking.*`)\n" +
+        "- **P&ID / electrical / engineering schematics** (`shape=mxgraph.pid2.*`, `shape=mxgraph.electrical.*`, `shape=mxgraph.mscae.*`)\n" +
+        "- **Swimlanes / pools** with custom colors and hand-placed contents\n" +
+        "- **UML class / component / deployment diagrams** where positioning carries meaning\n" +
+        "- **Venn diagrams, quadrant charts, concept maps** with custom regions — anything where hand-placed geometry is the point\n" +
+        "- **Any diagram requiring specific colors, fonts, stencils, or layouts** that Mermaid can't control precisely\n" +
+        "Call `search_shapes` first when you need industry icons (AWS / Azure / Cisco / P&ID / Kubernetes / floorplan / mockup / electrical) to find the correct `style` string for each shape.\n\n" +
+        "---\n\n" +
+        "**XML reasoning discipline (applies ONLY when you chose XML — skip this whole section if you're using Mermaid):** Your job in XML is declaring logical structure — nodes, edges, labels, groupings. Follow these steps in order: (1) **Decide `postLayout` FIRST, before writing any XML.** If the XML diagram is a flowchart, state diagram, decision tree, or any directional/hierarchical process diagram (which you should rarely be writing as XML — prefer Mermaid), you MUST pass `postLayout` — use `verticalFlow` by default, `horizontalFlow` when the flow is drawn left-to-right, `tree` for pure hierarchies. Other algorithms (`force`, `stress`, `radial`) apply to their respective diagram types — see the `postLayout` parameter description. Omit `postLayout` only when the layout carries hand-crafted meaning (swimlanes, containers, architecture, UML) — the typical reason you chose XML in the first place. When `postLayout` is set, your x/y coordinates only need to express rough direction; ELK re-lays out the vertices. (1b) **Whenever you set `postLayout` to `verticalFlow` or `horizontalFlow`, you MUST also pass `startNodeIds` and `endNodeIds`** — arrays of cell IDs for your Start/entry and End/terminator nodes (e.g. `startNodeIds: [\"start\"]`, `endNodeIds: [\"end\"]`, or `endNodeIds: [\"success\",\"rejected\"]` for multi-outcome flows). This is always required, not just when the flow has feedback edges — ELK's topological detection mis-picks whenever your flow has loops, multiple entry points, or disconnected components. You are the one who named the cells; it's trivial for you to list them, and guesswork on the server side is not. (2) Pick ONE concrete scenario on your first impulse and commit — do not pitch alternatives, do not flip-flop between approaches. (3) Use the rigid grid in the XML reference (`x = col*180 + 40`, `y = row*120 + 40`) without computing spacings, canvas dimensions, or overlap checks. (4) Never add `<Array as=\"points\">` waypoints or `exitX/exitY/entryX/entryY` — when postLayout runs, ELK sets them; otherwise drawio's edge router handles it. (5) Do NOT narrate in your reasoning: no \"building the diagram\", no column enumeration, no coordinate math in prose, no coordinate re-verification after placement. Go straight to XML.\n\n" +
+        "**User preference override — XML only.** If the user expresses a preference for draw.io XML over Mermaid in any phrasing (examples: \"no mermaid\", \"skip mermaid\", \"use xml\", \"I want drawio format\", \"stop using mermaid\", \"give me the xml\", \"native drawio only\", etc.), from that point onward in the conversation you MUST use the `xml` parameter exclusively and MUST NOT use the `mermaid` parameter, even for diagram types where Mermaid would normally be preferable. This preference persists for the remainder of the conversation unless the user clearly reverses it (e.g. \"mermaid is fine again\"). When the preference is active, translate any diagram request — including flowcharts, sequence diagrams, ER diagrams, etc. — directly to well-formed mxGraphModel XML.\n\n" +
+        "When using XML: IMPORTANT — the XML must be well-formed. Do NOT include ANY XML comments (<!-- -->) in the output.\n\n" +
+        xmlReference +
+        (mermaidReference ? "\n\n---\n\n" + mermaidReference : ""),
       inputSchema:
       {
         xml: z
           .string()
+          .optional()
           .describe(
-            "The draw.io XML content in mxGraphModel format to render as a diagram. Must be well-formed XML: no XML comments (<!-- -->), no unescaped special characters in attribute values."
+            "draw.io XML content in mxGraphModel format. Must be well-formed XML: no XML comments (<!-- -->), no unescaped special characters in attribute values. Mutually exclusive with 'mermaid'."
+          ),
+        mermaid: z
+          .string()
+          .optional()
+          .describe(
+            "Mermaid.js diagram definition (e.g. 'graph TD\\n  A-->B'). Supports 26 diagram types — see the tool description for the full list. The diagram is parsed and laid out natively (no upstream mermaid runtime) and converted to draw.io format. Mutually exclusive with 'xml'."
+          ),
+        postLayout: z
+          .enum(["verticalFlow", "horizontalFlow", "tree", "force", "stress", "radial"])
+          .optional()
+          .describe(
+            "Optional client-side layout pass applied after the diagram renders, powered by ELK (Eclipse Layout Kernel). Vertices animate (morph) from the positions you supplied to the algorithm's layout — they are **replaced**, so only your edge topology survives. You are the judge of when a canonical layout will read better than the coordinates you wrote; set this whenever the diagram type fits one of the algorithms below:\n" +
+            "- `verticalFlow` (ELK layered, top-down): flowcharts, process diagrams, state diagrams, decision flows, pipelines drawn vertically, ER/class diagrams with clear parent→child direction.\n" +
+            "- `horizontalFlow` (ELK layered, left-to-right): sequence-of-steps pipelines drawn horizontally, swimlanes aligned L→R, any directional process where the layout is wider than tall.\n" +
+            "- `tree` (ELK mrtree): org charts, decision trees, taxonomies, file/folder hierarchies — pure tree structures with a single root.\n" +
+            "- `force` (ELK force-directed): network / topology diagrams without a clear hierarchy (peer-to-peer, social graphs, knowledge graphs).\n" +
+            "- `stress` (ELK stress majorization): small-to-mid general graphs where `force` looks too loose — usually tighter and more readable for 10-30 nodes without a root.\n" +
+            "- `radial` (ELK radial): concentric layers around a root (mind maps, centered ego networks, influence diagrams).\n" +
+            "**Omit** for diagrams whose layout carries meaning you hand-crafted: swimlanes/pools, containers, architecture / deployment / network topology with grouped regions, P&ID or circuit schematics, floor plans, UML diagrams with deliberate placement. For Mermaid diagrams, the native layout already runs ELK — set this only if you specifically want a different algorithm.\n\n" +
+            "**When you set this to `verticalFlow` or `horizontalFlow`, you MUST also provide `startNodeIds` and `endNodeIds`** so ELK knows which nodes belong in the first and last layers."
+          ),
+        startNodeIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "**REQUIRED whenever `postLayout` is `verticalFlow` or `horizontalFlow`.** Cell IDs of start/entry nodes — pinned to the first layer (top for verticalFlow, left for horizontalFlow). Always pass this for layered flowcharts; do not rely on ELK's automatic source detection. You authored the cell IDs, so listing them is trivial. Example: a login flow with `<mxCell id=\"start\" value=\"Start\" ...>` should pass `startNodeIds: [\"start\"]`. Multiple entry points are allowed (e.g. `[\"manualStart\", \"scheduledStart\"]`)."
+          ),
+        endNodeIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "**REQUIRED whenever `postLayout` is `verticalFlow` or `horizontalFlow`.** Cell IDs of end/terminator nodes — pinned to the last layer (bottom for verticalFlow, right for horizontalFlow). Always pass this for layered flowcharts; do not rely on ELK's automatic sink detection. Example: `endNodeIds: [\"end\"]` for a single endpoint, or `endNodeIds: [\"success\", \"rejected\", \"expired\"]` for a multi-outcome flow."
           ),
       },
       annotations:
@@ -2013,16 +3380,30 @@ export function createServer(html, options = {})
         "openai/toolInvocation/invoked": "Diagram ready.",
       },
     },
-    async function({ xml })
+    async function({ xml, mermaid, postLayout, startNodeIds, endNodeIds })
     {
-      if (typeof xml !== "string" || xml.trim().length === 0)
+      var hasXml = (xml != null && typeof xml === "string" && xml.trim().length > 0);
+      var hasMermaid = (mermaid != null && typeof mermaid === "string" && mermaid.trim().length > 0);
+
+      try { console.log("[create_diagram] " + getBuildVersion() + " path=" + (hasMermaid ? "mermaid" : hasXml ? "xml" : "error")); } catch (e) {}
+
+      if (hasXml === hasMermaid)
       {
         return {
-          content: [{ type: "text", text: "Invalid input: expected a non-empty XML string, got " + (xml === null ? "null" : typeof xml) }],
+          content: [{ type: "text", text: "Provide exactly one of 'xml' or 'mermaid'. " + (hasXml ? "Both were provided." : "Neither was provided.") }],
           isError: true,
         };
       }
 
+      // Mermaid path: return JSON for client-side conversion
+      if (hasMermaid)
+      {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ mermaid: mermaid, postLayout: postLayout || null, startNodeIds: startNodeIds || null, endNodeIds: endNodeIds || null, _version: getBuildVersion() }) }],
+        };
+      }
+
+      // XML path: normalize, postprocess, validate
       var normalizedXml = normalizeDiagramXml(xml);
 
       if (!normalizedXml)
@@ -2034,17 +3415,22 @@ export function createServer(html, options = {})
         };
       }
 
-      // Post-process XML to optimize edge routing
+      // Server-side postprocess: xmldom normalization only (repairs
+      // malformed AI XML so mxCodec can decode it). ELK edge routing
+      // moved client-side — elkjs can't run in Cloudflare Workers.
       try
       {
-        normalizedXml = postprocessDiagramXml(normalizedXml).xml;
+        var ppResult = await postprocessDiagramXml(normalizedXml);
+        normalizedXml = ppResult.xml;
       }
       catch (e)
       {
-        // Use original XML on failure
+        try { console.log("[create_diagram] postprocessDiagramXml THREW: " + (e && e.message)); } catch (_) {}
       }
 
-      var content = [{ type: "text", text: normalizedXml }];
+      var content = [
+        { type: "text", text: JSON.stringify({ xml: normalizedXml, postLayout: postLayout || null, startNodeIds: startNodeIds || null, endNodeIds: endNodeIds || null, _version: getBuildVersion() }) }
+      ];
 
       // Validate and append warnings/errors so the LLM can self-correct
       var validation = validateDiagramXml(normalizedXml);

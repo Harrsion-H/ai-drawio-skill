@@ -1,4 +1,4 @@
 node_modules/
 src/xml-reference.md
+src/mermaid-reference.md
 src/postprocessor/postprocess.js
-src/postprocessor/lib/

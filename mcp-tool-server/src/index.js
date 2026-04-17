@@ -26,6 +26,16 @@ const xmlReference = readFileSync(
   "utf-8"
 );
 
+// Same dual-path lookup for the Mermaid reference. Appended to the
+// open_drawio_mermaid tool description so LLMs get concrete syntax hints
+// for every supported diagram type (26) plus flowchart styling.
+const sharedMermaidPath = join(__dirname, "..", "..", "shared", "mermaid-reference.md");
+const localMermaidPath = join(__dirname, "mermaid-reference.md");
+const mermaidReference = readFileSync(
+  existsSync(sharedMermaidPath) ? sharedMermaidPath : localMermaidPath,
+  "utf-8"
+);
+
 /**
  * Opens a URL in the default browser (cross-platform)
  */
@@ -201,7 +211,8 @@ const tools =
     description:
       "Opens the draw.io editor with a diagram generated from Mermaid.js syntax. " +
       "Supports flowcharts, sequence diagrams, class diagrams, state diagrams, " +
-      "entity relationship diagrams, and more using Mermaid.js syntax.",
+      "entity relationship diagrams, and more using Mermaid.js syntax.\n\n" +
+      mermaidReference,
     inputSchema:
     {
       type: "object",
@@ -306,10 +317,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) =>
       case "open_drawio_xml":
         type = "xml";
 
-        // Post-process XML to optimize edge routing
+        // Post-process XML — xmldom normalization only (repairs
+        // malformed AI markup so mxCodec can decode it). Edge routing
+        // is handled by the draw.io editor itself.
         try
         {
-          content = postprocessModule.postprocess(content).xml;
+          content = (await postprocessModule.postprocess(content)).xml;
         }
         catch (e)
         {
