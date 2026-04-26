@@ -7,7 +7,7 @@ Unified draw.io diagram skill for Claude Code. Integrates MCP session interactio
 ```
 skill-drawio/
 ├── CLAUDE.md                 # This file — developer notes
-├── SKILL.md                  # Claude Code skill definition
+├── SKILL.md                  # Claude Code skill definition (entry point)
 ├── references/               # Auto-synced from shared/ via GitHub Action
 │   ├── xml-reference.md
 │   ├── mermaid-reference.md
@@ -19,7 +19,7 @@ skill-drawio/
 
 ## Installation
 
-Copy the `skill-drawio/` directory to one of:
+Copy the entire `skill-drawio/` directory to one of:
 - `~/.claude/skills/drawio/` (personal, all projects)
 - `.claude/skills/drawio/` (per-project)
 
@@ -53,12 +53,11 @@ User invokes /drawio
 
 ## Dependencies
 
-- **pako** — optional, for URL compression. Scripts fall back to Node.js built-in zlib when pako is unavailable.
+Scripts use only Node.js built-ins (zlib for compression). pako is optional — scripts auto-detect and fall back to zlib.
 
 ## Compatibility notes
 
 - Additive only — no modifications to existing modules
-- One new file in `.github/workflows/` (skill-sync-references.yml)
 - All new files under `skill-drawio/`
 
 ## Coding Conventions
