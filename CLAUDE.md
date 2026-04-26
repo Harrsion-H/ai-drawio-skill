@@ -82,7 +82,7 @@ Backend priority: session mode (MCP) → inline mode (MCP) → CLI mode (scripts
 
 ## Key Gotchas
 
-- **XML comments forbidden** in draw.io output — `<!-- -->` breaks rendering
+- **XML comments are allowed** in draw.io output — `<!-- -->` is valid per XSD and renders correctly
 - **CSV `%column%` placeholders** in style attributes cause "URI malformed" errors — use hardcoded values
 - **Mermaid version differences** can cause blank diagrams — simplify syntax when in doubt
 - **`shared/style-reference.md`** exists but is separate from `xml-reference.md` — keep them in sync when adding new style properties
