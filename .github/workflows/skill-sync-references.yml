@@ -1,0 +1,47 @@
+name: Sync Skill References
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shared/**'
+  workflow_dispatch:
+
+jobs:
+  sync-references:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync shared/ to skill-drawio/references/
+        run: |
+          mkdir -p skill-drawio/references
+          cp shared/xml-reference.md skill-drawio/references/
+          cp shared/mermaid-reference.md skill-drawio/references/
+          cp shared/style-reference.md skill-drawio/references/
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet skill-drawio/references/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: sync shared references to skill-drawio"
+          branch: sync-skill-references
+          title: "chore: sync shared references to skill-drawio"
+          body: |
+            Auto-generated: synced `shared/` reference files to `skill-drawio/references/`.
+
+            Triggered by changes to `shared/` on `main`.
+          delete-branch: true
