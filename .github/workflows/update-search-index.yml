@@ -25,10 +25,14 @@ jobs:
       - name: Generate search index
         run: cd shape-search && npm run generate
 
+      - name: Sync index to skill-drawio
+        run: |
+          cp shape-search/search-index.json skill-drawio/scripts/search-index.json
+
       - name: Check for changes
         id: diff
         run: |
-          if git diff --quiet shape-search/search-index.json; then
+          if git diff --quiet shape-search/search-index.json skill-drawio/scripts/search-index.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
