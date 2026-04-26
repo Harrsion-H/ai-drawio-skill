@@ -9,6 +9,7 @@ The official draw.io MCP (Model Context Protocol) server that enables LLMs to op
 - **`mcp-tool-server/`** — Original MCP tool server (stdio-based, opens browser). Published as `@drawio/mcp` on npm.
 - **`project-instructions/`** — Claude Project instructions (no MCP required, no install).
 - **`skill-cli/`** — Claude Code skill (generates native `.drawio` files, opens in desktop app). No MCP required.
+- **`skill-drawio/`** — Unified Claude Code skill (XML + Mermaid, MCP + CLI, shape search, export). Fork-friendly additive module.
 - **`shape-search/`** — Shape search index generator. Loads draw.io's `app.min.js` via jsdom to extract all shape styles and tags into `search-index.json`, which powers the `search_shapes` MCP tool. Re-run after updating `drawio-dev` to pick up new or changed shapes.
 
 Each subdirectory has its own `CLAUDE.md` with implementation details.
