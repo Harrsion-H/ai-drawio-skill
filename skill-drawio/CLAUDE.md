@@ -7,12 +7,11 @@ Unified draw.io diagram skill for Claude Code. Integrates MCP session interactio
 ```
 skill-drawio/
 ├── CLAUDE.md                 # This file — developer notes
-├── drawio/
-│   ├── SKILL.md              # Claude Code skill definition
-│   └── references/           # Auto-synced from shared/ via GitHub Action
-│       ├── xml-reference.md
-│       ├── mermaid-reference.md
-│       └── style-reference.md
+├── SKILL.md                  # Claude Code skill definition
+├── references/               # Auto-synced from shared/ via GitHub Action
+│   ├── xml-reference.md
+│   ├── mermaid-reference.md
+│   └── style-reference.md
 └── scripts/
     ├── search-shapes.js      # CLI shape search (replicates search_shapes MCP tool)
     └── open-drawio.js        # Opens draw.io in browser with XML/Mermaid/CSV content
@@ -20,23 +19,15 @@ skill-drawio/
 
 ## Installation
 
-Copy the `drawio/` directory (including `SKILL.md`, `references/`, `scripts/`) to one of:
+Copy the `skill-drawio/` directory to one of:
 - `~/.claude/skills/drawio/` (personal, all projects)
 - `.claude/skills/drawio/` (per-project)
 
 Or use `npx skills add Harrsion-H/ai-drawio-skill` (vercel-labs/agent-skills format).
 
-## CLI Scripts
-
-```bash
-node scripts/search-shapes.js "aws lambda" 10     # Search shapes
-node scripts/open-drawio.js --xml diagram.drawio   # Open in browser
-node scripts/open-drawio.js --mermaid -            # Read from stdin
-```
-
 ## Reference Sync
 
-GitHub Action (`.github/workflows/skill-sync-references.yml`) auto-syncs `shared/` → `drawio/references/` on push to main.
+GitHub Action (`.github/workflows/skill-sync-references.yml`) auto-syncs `shared/` → `skill-drawio/references/` on push to main.
 
 ## Architecture
 
@@ -62,7 +53,7 @@ User invokes /drawio
 
 ## Dependencies
 
-- **pako** — URL compression (deflateRaw + base64) for open-drawio.js. Falls back to Node.js built-in zlib when pako is unavailable (standalone script usage). No npm install needed for scripts — zlib is always available.
+- **pako** — optional, for URL compression. Scripts fall back to Node.js built-in zlib when pako is unavailable.
 
 ## Compatibility notes
 
