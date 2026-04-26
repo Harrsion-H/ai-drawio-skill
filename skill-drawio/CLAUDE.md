@@ -11,10 +11,12 @@ skill-drawio/
 ├── references/               # Auto-synced from shared/ via GitHub Action
 │   ├── xml-reference.md
 │   ├── mermaid-reference.md
-│   └── style-reference.md
+│   ├── style-reference.md
+│   └── mxfile.xsd            # XSD schema for draw.io files
 └── scripts/
     ├── search-shapes.js      # CLI shape search (replicates search_shapes MCP tool)
-    └── open-drawio.js        # Opens draw.io in browser with XML/Mermaid/CSV content
+    ├── open-drawio.js        # Opens draw.io in browser with XML/Mermaid/CSV content
+    └── validate-mxfile.js    # Structural XML validation (no external deps)
 ```
 
 ## Installation

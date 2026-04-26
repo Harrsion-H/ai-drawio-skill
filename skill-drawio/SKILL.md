@@ -5,7 +5,72 @@ description: Always use when user asks to create, generate, draw, or design a di
 
 # Draw.io Diagram Skill (Unified)
 
-Unified draw.io diagram skill that supports XML and Mermaid generation, interactive editing, shape search, and export. Automatically detects the best available backend.
+Unified draw.io diagram skill. You are responsible for **aesthetics, structure, and content** — not just mechanically generating XML. Every diagram should look like it was designed by someone who cares about visual communication.
+
+## Philosophy
+
+- **Aesthetics** — diagrams should be visually clear, not just technically correct
+- **Structure** — logical grouping, meaningful containment, consistent spacing
+- **Content** — accurate labels, proper shape choices, meaningful colors
+
+### Aesthetic principles
+
+- **Color with purpose**: same-function elements share colors, different functions get distinct colors
+- **Consistent sizing**: elements of the same type get the same dimensions
+- **Meaningful shapes**: databases get cylinders, decisions get diamonds, external actors get stick figures
+- **Balanced layout**: distribute nodes evenly across the canvas, avoid clusters in one corner with empty space elsewhere
+- **Readable labels**: concise text that fits within the shape, no truncation
+- **Consistent spacing**: use the rigid grid — `x = col * 180 + 40`, `y = row * 120 + 40`
+
+## Workflow
+
+Follow this 6-step workflow for every diagram request:
+
+```
+① Receive → ② Read references → ③ Model → ④ Generate → ⑤ Validate → ⑥ Deliver
+```
+
+### Step 1: Receive
+
+Identify the request:
+- Diagram type (flowchart, architecture, ER, sequence, etc.)
+- Format preference (XML or Mermaid — default to Mermaid for standard types)
+- Special requirements (specific shapes, colors, export format)
+
+### Step 2: Read references
+
+**Before generating**, read the appropriate reference files. All paths are relative to this SKILL.md file.
+
+- **XML diagrams**: `references/xml-reference.md`
+- **Mermaid diagrams**: `references/mermaid-reference.md`
+- **Style properties**: `references/style-reference.md`
+
+### Step 3: Model
+
+Plan the diagram structure before writing XML:
+- Identify nodes, edges, and groups
+- Decide on grouping (swimlanes, containers, or flat)
+- Assign semantic IDs (see "ID Naming Convention" below)
+- Choose color assignments from the draw.io palette
+- Sketch the grid layout mentally
+
+### Step 4: Generate
+
+Produce the diagram. See "Creating a diagram" below for format and backend details.
+
+### Step 5: Validate (mandatory for XML)
+
+Run the validation script after generating XML:
+
+```bash
+node scripts/validate-mxfile.js <file.drawio>
+```
+
+If validation fails, fix the XML and re-validate. Do not deliver broken XML.
+
+### Step 6: Deliver
+
+Present the result. See "Output format strategy" for delivery mode.
 
 ## Quick decision guide
 
@@ -16,14 +81,6 @@ Unified draw.io diagram skill that supports XML and Mermaid generation, interact
 | AWS/Azure/GCP/network/electrical/P&ID diagrams | **XML + search_shapes** |
 | Edit an existing diagram | **get_diagram → edit_diagram** (session mode) or rewrite file (file mode) |
 | Export to PNG/SVG/PDF | draw.io CLI (file mode) or export_diagram (session mode) |
-
-## References — read before generating
-
-Before generating diagrams, read the appropriate reference files for complete syntax and style guidance. All paths are relative to this SKILL.md file.
-
-- **XML diagrams**: `references/xml-reference.md`
-- **Mermaid diagrams**: `references/mermaid-reference.md`
-- **Style properties**: `references/style-reference.md`
 
 ## Backend detection (run once per conversation)
 
@@ -58,13 +115,14 @@ Generate valid Mermaid syntax. Key rules:
 
 #### XML mode
 
-Generate mxGraphModel XML. Key rules:
-- Every diagram needs cells `id="0"` and `id="1" parent="0"`
+Generate mxfile XML. Key rules:
+- Use the full `<mxfile>` wrapper (see "XML format" below)
 - Use the rigid grid: `x = col * 180 + 40`, `y = row * 120 + 40`
 - Node sizes: rectangles 140x60, diamonds 140x80, circles 60x60, cylinders 100x70
 - Every edge must have `<mxGeometry relative="1" as="geometry" />` child
 - Edge routing is automatic — just declare `source` and `target`
 - Use `html=1` in all cell styles
+- Use semantic IDs (see "ID Naming Convention")
 - No XML comments. Escape `&amp;`, `&lt;`, `&gt;`, `&quot;` in attributes
 
 ### Step 3: Render or save
@@ -85,15 +143,17 @@ Generate mxGraphModel XML. Key rules:
 
 1. **Open in browser**: `node scripts/open-drawio.js --xml <file>` or `--mermaid <file>`
 2. **Search shapes**: `node scripts/search-shapes.js "aws lambda" 10`
-3. Use the returned `style` strings directly in XML cells
+3. **Validate XML**: `node scripts/validate-mxfile.js <file.drawio>`
+4. Use the returned `style` strings directly in XML cells
 
 #### File mode (fallback)
 
 1. If Mermaid: generate XML directly for the same diagram type
 2. Write XML to a `.drawio` file using the Write tool
-3. Post-process (optional): if `npx @drawio/postprocess` is available, run it on the .drawio file. Skip silently if unavailable
-4. If export format requested (png, svg, pdf), use draw.io CLI to export
-5. Open the result for viewing
+3. **Validate**: `node scripts/validate-mxfile.js <file.drawio>` — fix errors before delivering
+4. Post-process (optional): if `npx @drawio/postprocess` is available, run it on the .drawio file. Skip silently if unavailable
+5. If export format requested (png, svg, pdf), use draw.io CLI to export
+6. Open the result for viewing
 
 ## Editing an existing diagram
 
@@ -112,7 +172,8 @@ Generate mxGraphModel XML. Key rules:
 1. Read the existing .drawio file
 2. Modify the XML as needed (add/update/remove cells)
 3. Write the updated XML back to the file
-4. Re-open if needed
+4. Validate: `node scripts/validate-mxfile.js <file.drawio>`
+5. Re-open if needed
 
 ## Shape search
 
@@ -173,24 +234,79 @@ After successful export, delete the intermediate `.drawio` file — the exported
 | WSL2 | `cmd.exe /c start "" "$(wslpath -w <file>)"` |
 | Windows | `start <file>` |
 
+## ID naming convention
+
+Use descriptive, semantic IDs instead of bare numbers. This makes the XML readable, debuggable, and editable.
+
+**Pattern**: `<domain>__<role>`
+
+Examples:
+- `user__login-form` instead of `2`
+- `aws__lambda-order` instead of `3`
+- `db__primary` instead of `4`
+- `edge__login-to-validate` instead of `5`
+- `lane__customer` instead of `6`
+
+Rules:
+- Lowercase with hyphens as separators
+- Double-underscore `__` separates domain from role
+- IDs must be unique within the diagram
+- The structural cells `id="0"` and `id="1"` always keep their numeric IDs
+
+## HTML entity rules
+
+- **No HTML named entities** in `value` attributes: use `→` not `&rarr;`, `×` not `&times;`, `•` not `&bull;`
+- **Only 5 safe XML entities**: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`
+- **Superscript/subscript**: use HTML tags: `h<sup>v</sup>`, `CO<sub>2</sub>`
+- Named entities cause XML parsing failures in strict parsers — UTF-8 literals are universally safe
+
+## Output format strategy
+
+| User intent | Action |
+|-------------|--------|
+| "Draw a flowchart" | Default to Mermaid if backend supports it, XML otherwise |
+| "Architecture with specific layout" | Use XML — full positioning control |
+| "Draw with AWS/GCP shapes" | XML + `search_shapes` first |
+| "Export as PNG" | Generate XML → write .drawio → validate → CLI export |
+| "Edit existing diagram" | Session mode `get_diagram` → `edit_diagram`, or file read+write |
+| "Make it look nice" | Apply color palette, consistent sizing, proper shapes |
+| "View in browser" | `node scripts/open-drawio.js --xml <file>` |
+
 ## File naming
 
 - Descriptive name based on diagram content: `login-flow`, `database-schema`
 - Lowercase with hyphens for multi-word names
 - Export uses double extension: `name.drawio.png`, `name.drawio.svg`, `name.drawio.pdf`
 
-## XML format (basic structure)
+## Interaction tone
 
-Every diagram must have:
+- **When receiving**: "I'll create a [type] diagram with [N] nodes, [brief layout description]."
+- **When generating**: generate silently — do not narrate XML construction
+- **When validating**: if errors found, fix silently and re-validate. Only mention validation if errors persist
+- **When delivering**: "Diagram created: [brief description of what it shows and any design choices]"
+- **When iterating**: "Updating the diagram: [describe the specific change]"
+
+## XML format (mxfile)
+
+Every diagram must use the mxfile wrapper:
 
 ```xml
-<mxGraphModel adaptiveColors="auto">
-  <root>
-    <mxCell id="0"/>
-    <mxCell id="1" parent="0"/>
-  </root>
-</mxGraphModel>
+<mxfile host="Electron" agent="Claude" version="26.0.16">
+  <diagram name="描述性名称" id="unique_id">
+    <mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1"
+                  tooltips="1" connect="1" arrows="1" fold="1"
+                  page="1" pageScale="1" pageWidth="827" pageHeight="1169"
+                  adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
 ```
+
+For MCP session/inline mode, bare `<mxGraphModel>` is also accepted (the server extracts the model internally).
 
 Common shapes:
 - Rectangle: `rounded=1;whiteSpace=wrap;html=1;`
@@ -214,15 +330,17 @@ For complete Mermaid syntax and all 26 diagram types, read `references/mermaid-r
 - Escape special characters: `&amp;`, `&lt;`, `&gt;`, `&quot;`
 - Use unique `id` values for each `mxCell`
 - Every edge must have `<mxGeometry relative="1" as="geometry" />` child element
+- **Validate after generation**: `node scripts/validate-mxfile.js <file.drawio>`
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
 | draw.io CLI not found | Keep .drawio file, tell user to install draw.io desktop app |
-| Export empty/corrupt | Validate XML well-formedness, check for unescaped characters |
-| Blank diagram | Ensure root cells `id="0"` and `id="1"` exist |
+| Export empty/corrupt | Run `validate-mxfile.js`, fix errors, re-export |
+| Blank diagram | Run `validate-mxfile.js` — check for missing root cells, self-closing edges |
 | Edges not rendering | Add `<mxGeometry relative="1" as="geometry" />` to every edge |
 | Mermaid blank | Check type keyword spelling, verify node ID format |
 | Session not available | Fall back to CLI or file mode |
 | search-index.json not found | Run `cd shape-search && npm run generate`, or install from GitHub |
+| Named entities broken | Replace `&rarr;` etc. with UTF-8 literals (`→`) |
