@@ -2,6 +2,27 @@
 
 The official [draw.io](https://www.draw.io) MCP (Model Context Protocol) server that enables LLMs to create and open diagrams in the draw.io editor.
 
+## Quick Install: Claude Code Skill
+
+This fork includes a unified `skill-drawio/` that adds XML + Mermaid diagram generation, shape search, and export to Claude Code via a single `/drawio` command.
+
+```bash
+# Option 1: One-line install (recommended)
+npx skills add Harrsion-H/ai-drawio-skill
+
+# Option 2: Global install (all projects)
+cp -r skill-drawio ~/.claude/skills/drawio
+
+# Option 3: Per-project install
+cp -r skill-drawio .claude/skills/drawio
+```
+
+After installing, type `/drawio` in Claude Code to create diagrams. Supports flowcharts, sequence diagrams, ER diagrams, class diagrams, network topology, AWS/Azure/GCP architecture, and more.
+
+**[Skill documentation →](skill-drawio/README.md)**
+
+---
+
 ## Four Ways to Create Diagrams
 
 This repository offers four approaches for integrating draw.io with AI assistants. Pick the one that fits your setup:

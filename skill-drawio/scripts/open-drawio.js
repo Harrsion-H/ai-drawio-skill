@@ -98,14 +98,22 @@ function openBrowser(url)
 
   if (process.platform === "win32")
   {
-    var tmpFile = path.join(tmpdir(), "drawio-cli-" + Date.now() + ".url");
-    fs.writeFileSync(tmpFile, "[InternetShortcut]\r\nURL=" + url + "\r\n");
-    child = spawn("cmd", ["/c", "start", "", tmpFile], { shell: false, stdio: "ignore" });
-
-    setTimeout(function()
+    // Windows: cmd.exe has ~8191 char limit; use .url file fallback for long URLs
+    if (url.length <= 8000)
     {
-      try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
-    }, 10000);
+      child = spawn("cmd", ["/c", "start", "", url], { shell: false, stdio: "ignore" });
+    }
+    else
+    {
+      var tmpFile = path.join(tmpdir(), "drawio-cli-" + Date.now() + ".url");
+      fs.writeFileSync(tmpFile, "[InternetShortcut]\r\nURL=" + url + "\r\n");
+      child = spawn("cmd", ["/c", "start", "", tmpFile], { shell: false, stdio: "ignore" });
+
+      setTimeout(function()
+      {
+        try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+      }, 10000);
+    }
   }
   else if (process.platform === "darwin")
   {

@@ -1,136 +1,88 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Draw.io MCP Server
 
-The official draw.io MCP (Model Context Protocol) server that enables LLMs to open and create diagrams in the draw.io editor.
+Fork of `jgraph/drawio-mcp` at `Harrsion-H/ai-drawio-skill`. The upstream merge compatibility constraint means: **additive only** — new files in new directories, no modifications to existing modules.
 
 ## Repository Structure
 
-- **`shared/`** — Shared XML generation reference (`xml-reference.md`), the single source of truth for all LLM prompts.
-- **`mcp-app-server/`** — MCP App server (renders diagrams inline in chat via iframe). Hosted at `https://mcp.draw.io/mcp`. Can also be self-hosted via Node.js or Cloudflare Workers.
-- **`mcp-tool-server/`** — Original MCP tool server (stdio-based, opens browser). Published as `@drawio/mcp` on npm.
-- **`project-instructions/`** — Claude Project instructions (no MCP required, no install).
-- **`skill-cli/`** — Claude Code skill (generates native `.drawio` files, opens in desktop app). No MCP required.
-- **`skill-drawio/`** — Unified Claude Code skill (XML + Mermaid, MCP + CLI, shape search, export). Fork-friendly additive module.
-- **`shape-search/`** — Shape search index generator. Loads draw.io's `app.min.js` via jsdom to extract all shape styles and tags into `search-index.json`, which powers the `search_shapes` MCP tool. Re-run after updating `drawio-dev` to pick up new or changed shapes.
+- **`shared/`** — Single source of truth for all LLM prompts. `xml-reference.md`, `mermaid-reference.md`, `style-reference.md`. MCP servers and skills all consume from here.
+- **`mcp-app-server/`** — MCP App server (inline rendering via iframe). Hosted at `https://mcp.draw.io/mcp`. Node.js + Cloudflare Workers.
+- **`mcp-tool-server/`** — MCP tool server (stdio, opens browser). Published as `@drawio/mcp` on npm.
+- **`skill-cli/`** — Claude Code skill (generates `.drawio` files, opens in desktop app).
+- **`skill-drawio/`** — Unified Claude Code skill (XML + Mermaid, CLI scripts, shape search, export). Self-contained skill directory.
+- **`shape-search/`** — Generates `search-index.json` (~10K shapes) from draw.io's `app.min.js` via jsdom.
+- **`project-instructions/`** — Claude Project instructions (no MCP, no install).
+- **`postprocessor/`** — Post-processing for `.drawio` files.
 
-Each subdirectory has its own `CLAUDE.md` with implementation details.
+Each subdirectory has its own `CLAUDE.md`.
 
-## MCP App Server Tool
+## Development Commands
 
-### `create_diagram`
+```bash
+# MCP App Server
+cd mcp-app-server && npm install && npm start                    # Node.js on port 3001
+npm run build:worker                                              # Generate generated-html.js for Workers
+npm run deploy                                                    # Build + deploy to Cloudflare
 
-- **Input**: `{ xml: string }` - draw.io XML in mxGraphModel format
-- **Output**: Interactive diagram rendered inline via the draw.io viewer library
-- **Features**: Zoom, pan, layers, fullscreen, "Open in draw.io" button
+# MCP Tool Server
+cd mcp-tool-server && npm install && npm start                    # stdio transport
 
-### `search_shapes`
+# Shape Search Index (requires ../../drawio-dev checkout)
+cd shape-search && npm install
+DRAWIO_DEV_PATH=../../drawio-dev node generate-index.js
 
-- **Input**: `{ query: string, limit?: number }` - Search keywords and optional max results (default: 10, max: 50)
-- **Output**: Array of matching shapes with `{style, w, h, title}` — style strings can be used directly in mxCell attributes
-- **Search**: AND logic across space-separated terms, exact + Soundex phonetic matching
-- **Coverage**: ~10,000+ shapes across all draw.io libraries (AWS, Azure, GCP, P&ID, electrical, Cisco, Kubernetes, UML, BPMN, etc.)
-- **Use case**: Call before `create_diagram` only for diagrams needing industry-specific icons (cloud, network, P&ID, electrical, Cisco, Kubernetes). Skip for standard diagrams (flowcharts, UML, ERD, org charts) that use basic geometric shapes
-
-## MCP Tool Server Tools
-
-### `open_drawio_xml`
-
-Opens the draw.io editor with XML content.
-
-**Parameters:**
-- `content` (required): Draw.io XML content
-- `lightbox` (optional): Open in read-only lightbox mode (default: false)
-- `dark` (optional): Dark mode - "true" or "false" (default: false)
-
-**Example XML:**
-```xml
-<mxGraphModel adaptiveColors="auto">
-  <root>
-    <mxCell id="0"/>
-    <mxCell id="1" parent="0"/>
-    <mxCell id="2" value="Hello" style="rounded=1;" vertex="1" parent="1">
-      <mxGeometry x="100" y="100" width="120" height="60" as="geometry"/>
-    </mxCell>
-  </root>
-</mxGraphModel>
+# Skill CLI scripts (no install needed, uses Node.js built-ins)
+node skill-drawio/scripts/search-shapes.js "aws lambda" 10
+node skill-drawio/scripts/open-drawio.js --xml diagram.drawio
 ```
 
-### `open_drawio_csv`
+## Architecture: Reference Propagation
 
-Opens the draw.io editor with CSV data that gets converted to a diagram.
+`shared/` is the canonical source. Changes propagate automatically:
 
-**⚠️ Note:** CSV relies on draw.io's server-side processing and may occasionally fail or be unavailable. Consider using Mermaid for org charts when possible.
+| Consumer | How it gets references |
+|----------|----------------------|
+| MCP App Server | Reads `shared/` at startup / build time |
+| MCP Tool Server | Copies via `prepack` script before npm publish |
+| skill-drawio | GitHub Action syncs `shared/` → `skill-drawio/references/` on push to main |
+| Project instructions | Users manually copy |
 
-**Parameters:**
-- `content` (required): CSV content
-- `lightbox` (optional): Open in read-only lightbox mode (default: false)
-- `dark` (optional): Dark mode - "true" or "false" (default: false)
+**When updating diagram guidance, edit only `shared/` files.**
 
-**⚠️ Avoid** using `%column%` placeholders in style attributes (like `fillColor=%color%`) - this can cause "URI malformed" errors.
+## Architecture: MCP App Server Internals
 
-### `open_drawio_mermaid`
+Three bundles are inlined into a self-contained HTML string for the MCP Apps iframe sandbox:
+- `app-with-deps.js` (MCP Apps SDK) — ESM export stripped, replaced with `var` alias (sandbox has no `allow-same-origin`)
+- `pako_deflate.min.js` — URL compression
+- `drawio-mermaid/dist/mermaid.bundled.js` — native Mermaid→draw.io parser (26 diagram types + ELK layout)
 
-Opens the draw.io editor with a Mermaid.js diagram definition.
+Cloudflare Worker uses 4 sharded Durable Objects for session management (routing by `sessionId.charAt(0) % 4`). Sessions expire after 5 minutes idle.
 
-**Parameters:**
-- `content` (required): Mermaid.js syntax
-- `lightbox` (optional): Open in read-only lightbox mode (default: false)
-- `dark` (optional): Dark mode - "true" or "false" (default: false)
+## Architecture: skill-drawio
 
-## Quick Decision Guide
+Self-contained Claude Code skill. Users copy the entire `skill-drawio/` directory to `~/.claude/skills/drawio/`. SKILL.md uses relative paths (`references/`, `scripts/`) — all paths resolve from SKILL.md's location.
 
-| Need | Use | Reliability |
-|------|-----|-------------|
-| Flowchart, sequence, ER diagram | `open_drawio_mermaid` | High |
-| Custom styling, precise positioning | `open_drawio_xml` | High |
-| Org chart from data | `open_drawio_csv` | Medium |
-
-**Default to Mermaid** — it handles most diagram types reliably.
-
-## Best Practices for LLMs
-
-1. **Default to Mermaid**: It handles flowcharts, sequences, ER diagrams, Gantt charts, and more — all reliably
-2. **Use XML for precision**: When you need exact positioning, custom colors, or complex layouts
-3. **Avoid CSV for critical diagrams**: CSV processing can fail; prefer Mermaid for org charts when possible
-4. **Validate syntax**: Ensure Mermaid/CSV/XML syntax is correct before sending
-5. **Return the URL to users**: Always provide the generated URL so users can open the diagram in their browser
-
-## Shared References (Single Source of Truth)
-
-Two canonical reference files live in `shared/` and feed every delivery mechanism (MCP App Server, MCP Tool Server, Skill + CLI, Project Instructions):
-
-- **`shared/xml-reference.md`** — draw.io XML generation reference: styles, edge routing, containers, layers, tags, metadata, dark mode, well-formedness rules. Consumed by `create_diagram` (mcp-app-server) and `open_drawio_xml` (mcp-tool-server).
-- **`shared/mermaid-reference.md`** — Mermaid syntax reference for all 26 supported diagram types (flowchart, sequence, class, state, ER, gantt, mindmap, timeline, quadrant, C4, architecture, radar, packet, venn, treemap, kanban, zenuml, …) plus flowchart styling (`style`, `classDef`, `linkStyle`). Consumed by `open_drawio_mermaid` (mcp-tool-server).
-
-The MCP servers read these files at startup and append them to the relevant tool description. The skill and project instructions reference them via GitHub URL.
-
-When updating diagram-generation guidance, edit only these files — changes propagate to all consumers automatically.
+Backend priority: session mode (MCP) → inline mode (MCP) → CLI mode (scripts) → file mode (Write tool).
 
 ## Coding Conventions
 
-- **Allman brace style**: Opening braces go on their own line for all control structures, functions, objects, and callbacks.
+- **Allman brace style**: Opening braces on their own line for all control structures, functions, objects, and callbacks
+- Prefer `function()` expressions over arrow functions for callbacks
+- Vanilla JS throughout — no TypeScript, no build steps (except mcp-app-server Worker bundle)
 
-```js
-function example()
-{
-  if (condition)
-  {
-    doSomething();
-  }
-  else
-  {
-    doOther();
-  }
-}
-```
+## GitHub Actions
 
-- Prefer `function()` expressions over arrow functions for callbacks.
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `update-search-index.yml` | `repository_dispatch` (drawio release) or manual | Regenerates `shape-search/search-index.json` |
+| `skill-sync-references.yml` | Push to main touching `shared/**` or manual | Syncs `shared/` → `skill-drawio/references/` via PR |
 
-## Troubleshooting
+## Key Gotchas
 
-| Error | Cause | Solution |
-|-------|-------|----------|
-| XML comments in output | `<!-- -->` comments found in generated XML | Remove all XML comments — they are strictly forbidden |
-| "URI malformed" | Special characters in CSV style attributes | Use hardcoded colors instead of `%column%` placeholders |
-| "Service nicht verfügbar" | draw.io CSV server unavailable | Retry later or use Mermaid instead |
-| Blank diagram | Invalid Mermaid/XML syntax | Check syntax, ensure proper escaping |
-| Diagram doesn't match expected | Mermaid version differences | Simplify syntax, avoid edge cases |
+- **XML comments forbidden** in draw.io output — `<!-- -->` breaks rendering
+- **CSV `%column%` placeholders** in style attributes cause "URI malformed" errors — use hardcoded values
+- **Mermaid version differences** can cause blank diagrams — simplify syntax when in doubt
+- **`shared/style-reference.md`** exists but is separate from `xml-reference.md` — keep them in sync when adding new style properties

@@ -23,6 +23,7 @@ jobs:
           cp shared/xml-reference.md skill-drawio/references/
           cp shared/mermaid-reference.md skill-drawio/references/
           cp shared/style-reference.md skill-drawio/references/
+          cp shared/mxfile.xsd skill-drawio/references/
 
       - name: Check for changes
         id: diff
