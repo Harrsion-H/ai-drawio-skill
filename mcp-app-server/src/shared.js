@@ -4920,6 +4920,15 @@ app.ontoolresult = function(result)
   }
   else
   {
+    // Some hosts (observed on Claude iOS) deliver tool results whose
+    // content array has no type:"text" block. If streaming already
+    // produced a valid render, the diagram on screen is correct —
+    // suppress the error rather than clobbering it with an overlay.
+    if (streamingInitialized && currentXml != null)
+    {
+      return;
+    }
+
     endStreaming();
     var blockTypes = result.content
       ? result.content.map(function(c) { return c.type; }).join(", ")
