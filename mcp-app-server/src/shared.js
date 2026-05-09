@@ -3920,16 +3920,13 @@ function enableViewerInteractivity(graph)
       }
       else
       {
-        // Target 100 % normally. If fit is already at 100 % (i.e. the
-        // diagram is small enough that the fit-scale cap kicks in),
-        // 100 % is the same as fit and dblclick would be a no-op —
-        // bump to 200 % so it stays useful.
+        // Target scale follows zoomInTargetScale() — fit-to-width for
+        // tall/narrow diagrams, 100% (or 200% for tiny ones) otherwise.
+        // Anchor at the cursor so the dblclicked spot stays put.
         var rectD = containerEl.getBoundingClientRect();
         var pxD = e.clientX - rectD.left;
         var pyD = e.clientY - rectD.top;
-        var fitS = fitWholeScale();
-        var target = (fitS >= 0.999) ? 2.0 : 1.0;
-        customZoomToScaleAt(pxD, pyD, target);
+        customZoomToScaleAt(pxD, pyD, zoomInTargetScale());
         dblclickZoomedIn = true;
       }
       updateZoomFitButtonUi();
@@ -4319,6 +4316,64 @@ function fitWholeScale()
   var availW = Math.max(cw - STREAM_VIEWPORT_PADDING * 2, 1);
   var availH = Math.max(ch - STREAM_VIEWPORT_PADDING * 2, 1);
   return Math.min(availW / uw, availH / uh, 1);
+}
+
+/**
+ * Width-only fit scale — what scale would make the diagram exactly
+ * fit the container width (capped at 1). Used by the zoom-in toggle
+ * to prefer a comfortable full-width view over a cropped 100% for
+ * tall/narrow diagrams.
+ */
+function fitToWidthScale()
+{
+  if (streamGraph == null) return 1;
+  var bbox = computeWholeBBox(streamGraph.getModel());
+  if (bbox == null) return 1;
+  var cw = containerEl.clientWidth;
+  if (cw <= 0) return 1;
+  var uw = Math.max(bbox.maxX - bbox.minX, 1);
+  var availW = Math.max(cw - STREAM_VIEWPORT_PADDING * 2, 1);
+  return Math.min(availW / uw, 1);
+}
+
+/**
+ * Target scale for the "zoom in from fit" toggle (toolbar button and
+ * dblclick when not zoomed in). Rules, keyed off the current fit-whole
+ * scale (i.e. how zoomed-out the diagram is at fit):
+ *   - fit-whole >= 100%: tiny diagram already at 100% — bump to 200%
+ *     so the toggle isn't a visual no-op.
+ *   - fit-whole > 60%: fit is already a comfortable read — jump to 100%.
+ *   - fit-whole <= 60%: zoom in to at least 60%. Prefer fit-to-width
+ *     when it's larger than 60%, so tall/narrow diagrams show their
+ *     full horizontal extent without arbitrarily cropping the sides.
+ */
+function zoomInTargetScale()
+{
+  var fitW = fitWholeScale();
+  if (fitW >= 0.999) return 2.0;
+  if (fitW > 0.6) return 1.0;
+  return Math.max(0.6, fitToWidthScale());
+}
+
+/**
+ * Compute (s, tx, ty) that places the diagram at targetScale,
+ * horizontally centered, with the top of the bbox anchored to the
+ * top of the container (with STREAM_VIEWPORT_PADDING). Used by the
+ * toolbar zoom-in button so tall diagrams reveal their top first
+ * instead of jumping to the middle.
+ */
+function computeTopAnchoredTransform(targetScale)
+{
+  if (streamGraph == null) return null;
+  var bbox = computeWholeBBox(streamGraph.getModel());
+  if (bbox == null) return null;
+  var cw = containerEl.clientWidth;
+  if (cw <= 0) return null;
+  var s = Math.max(STREAM_MIN_SCALE, Math.min(4, targetScale));
+  var midX = (bbox.minX + bbox.maxX) / 2;
+  var tx = (cw / s) / 2 - midX;
+  var ty = STREAM_VIEWPORT_PADDING / s - bbox.minY;
+  return { s: s, tx: tx, ty: ty };
 }
 
 /**
@@ -5212,8 +5267,11 @@ document.getElementById('zoom-out-btn').addEventListener('click', function()
   customZoomBy(1 / 1.5);
 });
 
-// 2-state toggle mirroring the dblclick behavior: when fitted (initial
-// state) zoom in toward the container center; when zoomed in, fit.
+// 2-state toggle: when fitted, zoom in to the zoomInTargetScale()
+// (fit-to-width for tall/narrow, 100% otherwise) with the top of the
+// diagram anchored to the top of the container — for tall diagrams
+// this reveals the start of the content rather than the middle. When
+// already zoomed in, fall back to fit-whole.
 document.getElementById('zoom-fit-btn').addEventListener('click', function()
 {
   if (streamGraph == null) return;
@@ -5222,12 +5280,11 @@ document.getElementById('zoom-fit-btn').addEventListener('click', function()
     customFitView();
     return;
   }
-  var rect = containerEl.getBoundingClientRect();
-  var px = rect.width / 2;
-  var py = rect.height / 2;
-  var fitS = fitWholeScale();
-  var target = (fitS >= 0.999) ? 2.0 : 1.0;
-  customZoomToScaleAt(px, py, target);
+  var t = computeTopAnchoredTransform(zoomInTargetScale());
+  if (t != null)
+  {
+    animateCameraTo(t.s, t.tx, t.ty, 320);
+  }
   dblclickZoomedIn = true;
   updateZoomFitButtonUi();
 });
