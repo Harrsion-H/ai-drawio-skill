@@ -1696,6 +1696,23 @@ function streamMergeXmlDelta(graph, pendingEdges, xmlNode)
             (existing.geometry.width === 0 && existing.geometry.height === 0);
           var hasNonZeroBounds = (decoded.geometry.width > 0 || decoded.geometry.height > 0);
 
+          // Capture pre-merge rendered position for any existing cell
+          // that's already been laid out (non-zero bounds) and is
+          // moving. The pop-animation path handles the 0×0 → non-zero
+          // promotion separately; we only morph cells that already
+          // had a real position.
+          if (!hadZeroBounds && existing.geometry != null &&
+              (Math.abs(existing.geometry.x - decoded.geometry.x) > 0.5 ||
+               Math.abs(existing.geometry.y - decoded.geometry.y) > 0.5))
+          {
+            var preState = graph.view.getState(existing);
+
+            if (preState != null)
+            {
+              morphPrePositions[id] = { x: preState.x, y: preState.y };
+            }
+          }
+
           model.setGeometry(existing, decoded.geometry);
 
           // If geometry went from 0x0 to non-zero and cell hasn't been
@@ -1763,6 +1780,13 @@ function streamMergeXmlDelta(graph, pendingEdges, xmlNode)
   {
     model.endUpdate();
   }
+
+  // Run morph animations for cells whose existing geometry shifted in
+  // this delta. Must run BEFORE the pre-hide pass below so that we
+  // see the freshly-validated state positions (the pre-hide pass also
+  // calls view.validate, but applyMorphAnimations needs to read state
+  // before any other code touches inline styles on shape/text nodes).
+  applyMorphAnimations(graph);
 
   // Pre-hide cells that just got geometry to prevent flash before pop animation.
   // endUpdate() triggers view revalidation which renders them visible — we must
@@ -2047,6 +2071,19 @@ var animBatchStartT = 0;
 var deferredAnimCellIds = [];
 var deferredAnimTimer = null;
 var animatedCellIds = {};
+
+// Morph animation: when a re-parsed mermaid (or XML) delta moves an
+// existing cell to a new position, we GPU-animate the visual offset
+// back to zero via the CSS 'translate' property — the cell appears to
+// slide from its old position to its new one. CSS 'translate' (Level
+// 2) is independent of the SVG 'transform' attribute that mxGraph
+// writes for cell positioning, so the two compose cleanly without
+// fighting each other.
+//
+// morphPrePositions[id] = { x, y }  captured BEFORE setGeometry runs.
+// applyMorphAnimations consumes the map after endUpdate + validate.
+var morphPrePositions = {};
+var MORPH_DURATION_MS = 220;
 
 // Settle-debounce: wait this long after the most recent partial
 // before flushing. Short enough to feel responsive, long enough to
@@ -2412,6 +2449,14 @@ function drawInPath(path, delaySec)
   path.getBoundingClientRect();
   path.style.transition = 'stroke-dashoffset 0.5s ease-out ' + delaySec + 's';
 
+  // Per-path token: when overlapping deltas pen-draw the same path,
+  // only the latest scheduled cleanup is allowed to clear the inline
+  // dash state. Otherwise an older setTimeout fires mid-flight and
+  // wipes strokeDasharray/strokeDashoffset on the newer animation,
+  // causing a visible flicker.
+  var token = (path.__penDrawToken || 0) + 1;
+  path.__penDrawToken = token;
+
   requestAnimationFrame(function()
   {
     path.style.strokeDashoffset = '0';
@@ -2422,6 +2467,7 @@ function drawInPath(path, delaySec)
   // inline values lets the underlying attribute take over again.
   setTimeout(function()
   {
+    if (path.__penDrawToken !== token) return;
     path.style.transition = '';
     path.style.strokeDasharray = '';
     path.style.strokeDashoffset = '';
@@ -2443,6 +2489,208 @@ function fadeInWithDelay(node, delaySec)
   {
     node.style.transition = '';
   }, 350 + delaySec * 1000);
+}
+
+/**
+ * Drain morphPrePositions: for each cell whose pre-merge rendered
+ * position differs from its post-merge rendered position, animate the
+ * visual offset back to zero via the CSS 'translate' property. This
+ * runs entirely on the compositor (transform/translate are GPU-promoted
+ * properties) and is per-cell, so overlapping morphs from rapid deltas
+ * do not collide with each other or with the camera animation.
+ *
+ * Edges connected to a morphing endpoint are hidden immediately and
+ * pen-drawn after the morph settles — without this they'd dangle
+ * between the new model endpoint and the visually-offset vertex.
+ */
+function applyMorphAnimations(graph)
+{
+  var ids = Object.keys(morphPrePositions);
+  if (ids.length === 0) return;
+
+  graph.view.validate();
+
+  var model = graph.getModel();
+  var morphedIdSet = {};
+
+  for (var i = 0; i < ids.length; i++)
+  {
+    var id = ids[i];
+    var pre = morphPrePositions[id];
+    var cell = model.getCell(id);
+
+    if (cell == null) continue;
+
+    var state = graph.view.getState(cell);
+    if (state == null) continue;
+
+    var dx = pre.x - state.x;
+    var dy = pre.y - state.y;
+
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+
+    morphedIdSet[id] = true;
+
+    if (state.shape != null && state.shape.node != null)
+    {
+      morphNodeBy(state.shape.node, dx, dy);
+    }
+
+    if (state.text != null && state.text.node != null)
+    {
+      morphNodeBy(state.text.node, dx, dy);
+    }
+  }
+
+  morphPrePositions = {};
+
+  hideAndRedrawEdgesForMorph(graph, morphedIdSet);
+}
+
+/**
+ * Apply a CSS 'translate' of (dx, dy) to a single SVG node and animate
+ * it back to (0, 0) over MORPH_DURATION_MS. If a previous morph is
+ * still mid-flight, snapshot its current visual offset and use that as
+ * the new starting point so the cell continues smoothly from where it
+ * was instead of snapping back to identity.
+ */
+function morphNodeBy(node, dx, dy)
+{
+  // If a prior morph is still transitioning, the computed translate
+  // is somewhere between (priorDx, priorDy) and (0, 0). Read it and
+  // add to the new delta so the start of THIS animation is exactly
+  // where the cell is currently visible.
+  var current = parseTranslate(node);
+
+  // Cancel any in-flight transition before we set the new start value,
+  // otherwise the assignment itself would animate.
+  node.style.transition = 'none';
+  node.style.translate = (dx + current.x) + 'px ' + (dy + current.y) + 'px';
+
+  // Force layout flush so the start state is captured before we
+  // re-enable transitions.
+  node.getBoundingClientRect();
+
+  node.style.transition = 'translate ' + MORPH_DURATION_MS + 'ms ease-out';
+
+  // Per-node token: a stale setTimeout from a prior morph must not
+  // clear transition/translate while a fresh morph is mid-flight.
+  // String-comparing node.style.transition doesn't work because
+  // every morph sets the same canonical transition string.
+  var token = (node.__morphToken || 0) + 1;
+  node.__morphToken = token;
+
+  requestAnimationFrame(function()
+  {
+    node.style.translate = '0 0';
+  });
+
+  setTimeout(function()
+  {
+    if (node.__morphToken !== token) return;
+    node.style.transition = '';
+    node.style.translate = '';
+  }, MORPH_DURATION_MS + 50);
+}
+
+function parseTranslate(node)
+{
+  var raw = '';
+  try { raw = window.getComputedStyle(node).translate; }
+  catch (e) { return { x: 0, y: 0 }; }
+
+  if (raw == null || raw === '' || raw === 'none') return { x: 0, y: 0 };
+
+  // Computed value format: "Xpx", "Xpx Ypx", or "Xpx Ypx Zpx".
+  var parts = raw.split(/\s+/);
+  var x = parseFloat(parts[0]);
+  var y = (parts.length > 1) ? parseFloat(parts[1]) : 0;
+
+  return {
+    x: isFinite(x) ? x : 0,
+    y: isFinite(y) ? y : 0
+  };
+}
+
+/**
+ * For every edge whose source or target was morphed, hide the edge
+ * group immediately and pen-draw it after the morph settles. Without
+ * this the edge path is laid out from the NEW model terminal
+ * positions while the vertex visually sits at its OLD position,
+ * leaving a brief gap or dangling segment.
+ */
+function hideAndRedrawEdgesForMorph(graph, morphedIdSet)
+{
+  var morphedIds = Object.keys(morphedIdSet);
+  if (morphedIds.length === 0) return;
+
+  var model = graph.getModel();
+  // Per-node redraw token: when overlapping morphs hide the same edge
+  // shape/label, only the LATEST scheduled pen-draw owns the redraw.
+  // Older setTimeouts find a mismatched token and skip — without this
+  // gate, an older callback would re-trigger drawInEdgeNode and reset
+  // a newer in-flight stroke from opacity 0, producing the flicker.
+  var pendingShape = []; // [{ node, token }]
+  var pendingText  = []; // [{ node, token }]
+  var seen = [];
+
+  for (var m = 0; m < morphedIds.length; m++)
+  {
+    var cell = model.getCell(morphedIds[m]);
+    if (cell == null || cell.edges == null) continue;
+
+    for (var e = 0; e < cell.edges.length; e++)
+    {
+      var edge = cell.edges[e];
+      if (edge == null) continue;
+      // Skip edges that are about to pop-animate (new this delta) —
+      // queueCellAnimation owns their visibility lifecycle.
+      if (pendingAnimCellIds.indexOf(edge.id) !== -1) continue;
+      if (seen.indexOf(edge) !== -1) continue;
+      seen.push(edge);
+
+      var es = graph.view.getState(edge);
+      if (es == null) continue;
+
+      if (es.shape != null && es.shape.node != null)
+      {
+        var sn = es.shape.node;
+        sn.style.opacity = '0';
+        var st = (sn.__edgeRedrawToken || 0) + 1;
+        sn.__edgeRedrawToken = st;
+        pendingShape.push({ node: sn, token: st });
+      }
+      if (es.text != null && es.text.node != null)
+      {
+        var tn = es.text.node;
+        tn.style.opacity = '0';
+        var tt = (tn.__edgeRedrawToken || 0) + 1;
+        tn.__edgeRedrawToken = tt;
+        pendingText.push({ node: tn, token: tt });
+      }
+    }
+  }
+
+  if (pendingShape.length === 0 && pendingText.length === 0) return;
+
+  // Pen-draw after the vertex morph has settled — the edge geometry
+  // is already correct (laid out from the new terminal positions);
+  // we just need it offscreen until the vertex visuals catch up.
+  setTimeout(function()
+  {
+    for (var i = 0; i < pendingShape.length; i++)
+    {
+      var es = pendingShape[i];
+      if (es.node.__edgeRedrawToken !== es.token) continue;
+      drawInEdgeNode(es.node, 0);
+    }
+    for (var j = 0; j < pendingText.length; j++)
+    {
+      var et = pendingText[j];
+      if (et.node.__edgeRedrawToken !== et.token) continue;
+      fadeInWithDelay(et.node, 0.2);
+    }
+  }, MORPH_DURATION_MS);
 }
 
 /**
