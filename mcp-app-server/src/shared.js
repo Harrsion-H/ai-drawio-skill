@@ -788,8 +788,9 @@ function stabilizeMermaidIds(xml)
   var children = rootEl.childNodes;
 
   // Resolve the (carrier, attrSrc) pair for a child node. UserObject /
-  // object wrappers carry the id externally and everything else on an
-  // inner <mxCell>; plain <mxCell> cells carry both on themselves.
+  // object wrappers carry the id and label externally and everything
+  // else on an inner <mxCell>; plain <mxCell> cells carry both on
+  // themselves.
   function pair(node)
   {
     var inner = null;
@@ -801,6 +802,21 @@ function stabilizeMermaidIds(xml)
     }
 
     return { carrier: node, attrSrc: (inner != null) ? inner : node };
+  }
+
+  // Mirrors Graph.convertValueToString at the XML level: UserObject
+  // wrappers store the label as the carrier's 'label' attribute; plain
+  // mxCells store it as the 'value' attribute. Reading the wrong one
+  // (the previous default to 'value' on every node) collapsed every
+  // wrapped cell to the empty string and made the content hash
+  // worthless for de-duping across re-parses.
+  function nodeLabel(p)
+  {
+    if (p.carrier !== p.attrSrc)
+    {
+      return p.carrier.getAttribute('label') || '';
+    }
+    return p.carrier.getAttribute('value') || '';
   }
 
   // Two-pass rename. The gitgraph cell factory (and possibly others in
@@ -823,7 +839,7 @@ function stabilizeMermaidIds(xml)
     if (oldId == null || oldId === '0' || oldId === '1') continue;
     if (p.attrSrc.getAttribute('edge') === '1') continue;
 
-    var value = p.carrier.getAttribute('value') || p.attrSrc.getAttribute('value') || '';
+    var value = nodeLabel(p);
     var isVertex = p.attrSrc.getAttribute('vertex') === '1';
     var parentId = p.attrSrc.getAttribute('parent');
 
@@ -860,7 +876,7 @@ function stabilizeMermaidIds(xml)
 
     if (isEdge)
     {
-      var value = p.carrier.getAttribute('value') || p.attrSrc.getAttribute('value') || '';
+      var value = nodeLabel(p);
       var stableSrc = (sourceId != null && idMap[sourceId] != null) ? idMap[sourceId] : (sourceId || '');
       var stableTgt = (targetId != null && idMap[targetId] != null) ? idMap[targetId] : (targetId || '');
       idMap[oldId] = makeStableId('e', stableSrc + '|' + stableTgt + '|' + value);
@@ -1598,6 +1614,10 @@ function streamMergeXmlDelta(graph, pendingEdges, xmlNode)
   var model = graph.getModel();
   var codec = new mxCodec(modelNode.ownerDocument);
 
+  // Resolve parent/source/target references against the live model so
+  // mxCellCodec wires up edges as cells stream in. updateElements is
+  // no-op'd because we manage IDs ourselves and don't want the codec
+  // mutating the source XML's id attributes.
   codec.lookup = function(id) { return model.getCell(id); };
   codec.updateElements = function() {};
 
@@ -1618,82 +1638,77 @@ function streamMergeXmlDelta(graph, pendingEdges, xmlNode)
 
       if (cellNode.nodeType !== 1) continue;
 
-      var actualCellNode = cellNode;
+      // codec.decodeCell handles <mxCell>, <UserObject>, and <object>
+      // uniformly: it walks children to find the cell codec for wrapper
+      // elements (no codec is registered under 'UserObject' in the
+      // viewer build) and returns an mxCell whose .value is the wrapper
+      // DOM node — which is what Graph.convertValueToString reads the
+      // 'label' attribute off of, and what carries any custom attrs
+      // (mermaidId, mermaidBaseStyle, …) through to the model.
+      //
+      // The second arg is restoreStructures=false: insertIntoGraph
+      // would call parent.insert() directly, bypassing model.cellAdded
+      // and leaving the cell unregistered in model.cells. We re-attach
+      // via model.add / model.setTerminal below so the lookup map and
+      // edge-list invariants are maintained.
+      var decoded = null;
+      try { decoded = codec.decodeCell(cellNode, false); }
+      catch (e) { continue; }
 
-      if (cellNode.nodeName === 'UserObject' || cellNode.nodeName === 'object')
-      {
-        var inner = cellNode.getElementsByTagName('mxCell');
-
-        if (inner.length > 0)
-        {
-          actualCellNode = inner[0];
-
-          if (actualCellNode.getAttribute('id') == null &&
-            cellNode.getAttribute('id') != null)
-          {
-            actualCellNode.setAttribute('id', cellNode.getAttribute('id'));
-          }
-        }
-      }
-
-      var id = actualCellNode.getAttribute('id');
-
+      if (decoded == null) continue;
+      var id = decoded.id;
       if (id == null) continue;
 
       var existing = model.getCell(id);
 
       if (existing != null)
       {
-        // Update existing cell
-        var style = actualCellNode.getAttribute('style');
-        if (style != null && style !== existing.style) model.setStyle(existing, style);
-
-        var value = actualCellNode.getAttribute('value');
-        if (value != null && value !== existing.value) model.setValue(existing, value);
-
-        var geoNodes = actualCellNode.getElementsByTagName('mxGeometry');
-        if (geoNodes.length > 0)
+        if (decoded.style != null && decoded.style !== existing.style)
         {
-          var geo = codec.decode(geoNodes[0]);
+          model.setStyle(existing, decoded.style);
+        }
 
-          if (geo != null)
+        if (cellValueChanged(decoded.value, existing.value))
+        {
+          model.setValue(existing, decoded.value);
+        }
+
+        if (decoded.geometry != null)
+        {
+          var hadZeroBounds = existing.geometry == null ||
+            (existing.geometry.width === 0 && existing.geometry.height === 0);
+          var hasNonZeroBounds = (decoded.geometry.width > 0 || decoded.geometry.height > 0);
+
+          model.setGeometry(existing, decoded.geometry);
+
+          // If geometry went from 0x0 to non-zero and cell hasn't been
+          // animated yet, queue it for deferred pop animation
+          if (hadZeroBounds && hasNonZeroBounds && !animatedCellIds[id])
           {
-            var hadZeroBounds = existing.geometry == null ||
-              (existing.geometry.width === 0 && existing.geometry.height === 0);
-            var hasNonZeroBounds = (geo.width > 0 || geo.height > 0);
-
-            model.setGeometry(existing, geo);
-
-            // If geometry went from 0x0 to non-zero and cell hasn't been
-            // animated yet, queue it for deferred pop animation
-            if (hadZeroBounds && hasNonZeroBounds && !animatedCellIds[id])
+            // Make cell visible in model (was hidden in streamInsertCell)
+            if (!existing.visible)
             {
-              // Make cell visible in model (was hidden in streamInsertCell)
-              if (!existing.visible)
-              {
-                model.setVisible(existing, true);
-              }
+              model.setVisible(existing, true);
+            }
 
-              var dIdx = deferredAnimCellIds.indexOf(id);
+            var dIdx = deferredAnimCellIds.indexOf(id);
 
-              if (dIdx >= 0)
-              {
-                deferredAnimCellIds.splice(dIdx, 1);
-              }
+            if (dIdx >= 0)
+            {
+              deferredAnimCellIds.splice(dIdx, 1);
+            }
 
-              // Avoid duplicate: only queue if not already pending
-              if (pendingAnimCellIds.indexOf(id) === -1)
-              {
-                pendingAnimCellIds.push(id);
-              }
+            // Avoid duplicate: only queue if not already pending
+            if (pendingAnimCellIds.indexOf(id) === -1)
+            {
+              pendingAnimCellIds.push(id);
             }
           }
         }
       }
       else
       {
-        // Insert new cell
-        streamInsertCell(model, codec, actualCellNode, pendingEdges);
+        streamInsertCell(model, decoded, pendingEdges);
       }
     }
 
@@ -1764,85 +1779,113 @@ function streamMergeXmlDelta(graph, pendingEdges, xmlNode)
   return pendingEdges;
 }
 
-function streamInsertCell(model, codec, cellNode, pendingEdges)
+function streamInsertCell(model, decoded, pendingEdges)
 {
-  var id = cellNode.getAttribute('id');
-  var parentId = cellNode.getAttribute('parent');
-  var sourceId = cellNode.getAttribute('source');
-  var targetId = cellNode.getAttribute('target');
-  var value = cellNode.getAttribute('value');
-  var style = cellNode.getAttribute('style');
-  var isVertex = cellNode.getAttribute('vertex') === '1';
-  var isEdge = cellNode.getAttribute('edge') === '1';
-  var isConnectable = cellNode.getAttribute('connectable');
-  var isVisible = cellNode.getAttribute('visible');
+  var id = decoded.id;
+  if (id == null) return;
 
-  var cell = new mxCell(value, null, style);
-  cell.id = id;
-  cell.vertex = isVertex;
-  cell.edge = isEdge;
+  // The default model already has roots '0' and '1' from createRoot().
+  if (id === '0') return;
+  if (id === '1' && model.getCell('1') != null) return;
 
-  if (isConnectable === '0') cell.connectable = false;
-  if (isVisible === '0') cell.visible = false;
-
-  var geoNodes = cellNode.getElementsByTagName('mxGeometry');
-  var hasGeo = false;
-
-  if (geoNodes.length > 0)
+  // Resolve parent through the live model. codec.decodeCell sets
+  // decoded.parent via its internal codec.objects cache, which after
+  // an earlier decode of <mxCell id="1"/> in the same merge points at
+  // an orphan mxCell — using it directly would attach this cell to a
+  // node that isn't reachable from model.root, and model.cellAdded
+  // would skip the cells-map registration.
+  var parent = null;
+  if (decoded.parent != null && decoded.parent.id != null)
   {
-    var geo = codec.decode(geoNodes[0]);
-
-    if (geo != null)
-    {
-      cell.geometry = geo;
-      hasGeo = (geo.width > 0 || geo.height > 0) || geo.relative;
-    }
+    parent = model.getCell(decoded.parent.id);
   }
+  if (parent == null && model.root != null)
+  {
+    if (id === '1') parent = model.root;
+    else parent = model.getCell('1') || model.root;
+  }
+  if (parent == null) return;
 
   // Hide vertices without geometry to prevent label flash at (0,0).
   // They become visible when geometry arrives via the update path.
-  if (isVertex && !hasGeo)
+  var hasGeo = decoded.geometry != null &&
+    ((decoded.geometry.width > 0 || decoded.geometry.height > 0) ||
+     decoded.geometry.relative);
+
+  if (decoded.vertex && !hasGeo)
   {
-    cell.visible = false;
+    decoded.visible = false;
   }
 
-  var parent = (parentId != null) ? model.getCell(parentId) : null;
-  if (parent == null && model.root != null)
+  // Capture the codec-set source/target ids before we null them. The
+  // codec consumes (mutates) the source XML node during decode — the
+  // inner <mxCell> is removed from <UserObject> wrappers — so we can't
+  // re-read source/target from cellNode after this point.
+  var sourceId = (decoded.source != null) ? decoded.source.id : null;
+  var targetId = (decoded.target != null) ? decoded.target.id : null;
+
+  // Detach the codec-set parent/source/target before model.add. The
+  // change machinery decides whether to fire cellAdded / insertEdge by
+  // comparing the previous links against the new ones — if the codec
+  // already wired them up (against its own objects cache, which may
+  // hold orphan decode-time mxCells from earlier in this same merge),
+  // those side effects are skipped and the cell ends up unregistered.
+  decoded.parent = null;
+  decoded.source = null;
+  decoded.target = null;
+
+  model.add(parent, decoded);
+
+  if (decoded.edge)
   {
-    if (id === '0') return;
-    else if (id === '1')
+    // Resolve terminals against the live model so we land on the
+    // actual model cell, not a codec-cached orphan. Unresolved
+    // terminals — referenced vertex hasn't streamed in yet — get
+    // queued for retry once a later partial brings it in.
+    if (sourceId != null)
     {
-      if (model.getCell('1') != null) return;
-      parent = model.root;
+      var src = model.getCell(sourceId);
+      if (src != null) model.setTerminal(decoded, src, true);
     }
-    else
+    if (targetId != null)
     {
-      parent = model.getCell('1') || model.root;
+      var tgt = model.getCell(targetId);
+      if (tgt != null) model.setTerminal(decoded, tgt, false);
     }
-  }
 
-  if (parent == null) return;
-
-  model.add(parent, cell);
-
-  if (isEdge)
-  {
-    var source = (sourceId != null) ? model.getCell(sourceId) : null;
-    var target = (targetId != null) ? model.getCell(targetId) : null;
-    var hasMissing = false;
-
-    if (source != null) model.setTerminal(cell, source, true);
-    else if (sourceId != null) hasMissing = true;
-
-    if (target != null) model.setTerminal(cell, target, false);
-    else if (targetId != null) hasMissing = true;
+    var hasMissing = (sourceId != null && decoded.source == null) ||
+                     (targetId != null && decoded.target == null);
 
     if (hasMissing)
     {
-      model.setVisible(cell, false);
-      pendingEdges.push({ cell: cell, sourceId: sourceId, targetId: targetId });
+      model.setVisible(decoded, false);
+      pendingEdges.push({ cell: decoded, sourceId: sourceId, targetId: targetId });
     }
   }
+}
+
+/**
+ * Compare an incoming cell value to the existing one. Strings compare
+ * by identity; UserObject DOM nodes compare by serialized form so a
+ * fresh node with the same label + custom attributes is a no-op (no
+ * wasted re-render of unchanged labels during streaming).
+ */
+function cellValueChanged(newValue, oldValue)
+{
+  if (newValue === oldValue) return false;
+  if (newValue == null || oldValue == null) return true;
+
+  if (typeof newValue === 'string' || typeof oldValue === 'string')
+  {
+    return newValue !== oldValue;
+  }
+
+  if (newValue.outerHTML != null && oldValue.outerHTML != null)
+  {
+    return newValue.outerHTML !== oldValue.outerHTML;
+  }
+
+  return true;
 }
 
 /**
