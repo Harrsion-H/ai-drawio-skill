@@ -1,17 +1,28 @@
 # ELK Layout Vendor
 
-Only the mxGraph wrapper is vendored here:
+Two artifacts are vendored here:
 
-- `mxElkLayout.js` — mxGraph wrapper around ELK (`buildElkGraph`, `applyElkLayout`, `executeAsync`). Vendored from `jgraph/drawio-dev` origin/elk-layout branch.
+- `drawio-elk.min.js` — IIFE bundle. Defines `var ELK` (visible as `globalThis.ELK`) consumed by `drawio-mermaid.min.js` and `mxElkLayout.js`.
+- `mxElkLayout.js` — mxGraph wrapper around ELK (`buildElkGraph`, `applyElkLayout`, `executeAsync`).
 
-The ELK engine itself (`elk.bundled.js`, ~1.6 MB) is no longer vendored — it's published as `globalThis.ELK` by `drawio-mermaid/dist/mermaid.bundled.js`, which the app server already inlines. See [`../../src/build-html.js`](../../src/build-html.js).
+Vendored to keep this repo self-contained — see issue #29.
 
-## Refreshing mxElkLayout.js
+## Versioning
 
-Until the `elk-layout` branch merges to drawio-dev's `dev`/`main`, refresh manually from a sibling `drawio-dev` checkout:
+`drawio-elk.min.js`'s first line is a banner of the form:
 
-```sh
-git -C ../../../drawio-dev show origin/elk-layout:src/main/webapp/js/elk/mxElkLayout.js > mxElkLayout.js
+```
+/*! @drawio/elk <semver>+commit.<sha> (built <yyyy-mm-dd>) */
 ```
 
-Once `elk-layout` lands on `dev`, switch to reading directly from the sibling repo in `build-html.js` and delete this vendor directory.
+To inspect the version of the vendored copy:
+
+```sh
+head -1 drawio-elk.min.js
+```
+
+`mxElkLayout.js` has no banner — it's a thin mxGraph adapter.
+
+## Refreshing
+
+Both files are manually updated by the repo owner.

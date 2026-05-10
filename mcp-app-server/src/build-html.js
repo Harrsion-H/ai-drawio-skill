@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildHtml, processAppBundle } from "./shared.js";
+import { buildHtml, processAppBundle, processMermaidBundle, processElkBundle } from "./shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -29,17 +29,26 @@ const pakoDeflateJs = fs.readFileSync(
   "utf-8"
 );
 
-// Read the drawio-mermaid IIFE bundle from the sibling repo. Build
-// drawio-mermaid (`npm run build`) before running build-html.js.
-const mermaidBundlePath = path.join(
-  __dirname, "..", "..", "..", "drawio-mermaid", "dist", "mermaid.bundled.js"
-);
-const mermaidJs = fs.readFileSync(mermaidBundlePath, "utf-8");
-console.log(`Mermaid bundle: ${mermaidBundlePath} (${(mermaidJs.length / 1024).toFixed(1)} KB)`);
+// Read + process the drawio-elk bundle (vendored from drawio-dev — see
+// vendor/elk/README.md). Ships as ESM; processElkBundle strips the export
+// and aliases the default export to `var ELK` so drawio-mermaid and
+// mxElkLayout pick it up from globalThis. MUST be loaded before mermaid.
+const elkBundlePath = path.join(__dirname, "..", "vendor", "elk", "drawio-elk.min.js");
+const elkRaw = fs.readFileSync(elkBundlePath, "utf-8");
+const elkJs = processElkBundle(elkRaw);
+console.log(`ELK bundle: ${elkBundlePath} (${(elkRaw.length / 1024).toFixed(1)} KB)`);
 
-// Read the mxElkLayout wrapper — it's vendored from drawio-dev origin/elk-layout
-// (see vendor/elk/README.md). The ELK engine itself is no longer vendored; it's
-// bundled into drawio-mermaid and published as `globalThis.ELK` at load time.
+// Read + process the drawio-mermaid bundle (vendored from drawio-dev — see
+// vendor/mermaid/README.md). Ships as ESM; processMermaidBundle aliases
+// the mxMermaidToDrawio export to a global so the viewer code can call it.
+// Reads globalThis.ELK on init.
+const mermaidBundlePath = path.join(__dirname, "..", "vendor", "mermaid", "drawio-mermaid.min.js");
+const mermaidRaw = fs.readFileSync(mermaidBundlePath, "utf-8");
+const mermaidJs = processMermaidBundle(mermaidRaw);
+console.log(`Mermaid bundle: ${mermaidBundlePath} (${(mermaidRaw.length / 1024).toFixed(1)} KB)`);
+
+// Read the mxElkLayout wrapper (vendored from drawio-dev origin/elk-layout —
+// see vendor/elk/README.md).
 const mxElkLayoutPath = path.join(__dirname, "..", "vendor", "elk", "mxElkLayout.js");
 const mxElkLayoutJs = fs.readFileSync(mxElkLayoutPath, "utf-8");
 console.log(`mxElkLayout: ${mxElkLayoutPath} (${(mxElkLayoutJs.length / 1024).toFixed(1)} KB)`);
@@ -76,8 +85,13 @@ const faviconPath = path.join(__dirname, "..", "favicon.png");
 const faviconBase64 = fs.readFileSync(faviconPath).toString("base64");
 console.log(`Favicon: ${faviconPath} (${(faviconBase64.length / 1024).toFixed(1)} KB base64)`);
 
-// Build the HTML and write it as an ES module export
-const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { mxElkLayoutJs });
+// Build the HTML and write it as an ES module export. The build
+// version timestamp is captured at build time and baked into the HTML
+// so the iframe can log it on startup — used to confirm a fresh
+// bundle is running after a redeploy.
+const buildVersion = "drawio-mcp-" + new Date().toISOString();
+console.log(`Build version: ${buildVersion}`);
+const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { elkJs, mxElkLayoutJs, buildVersion });
 const outPath = path.join(__dirname, "generated-html.js");
 
 fs.writeFileSync(outPath,

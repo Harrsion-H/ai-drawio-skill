@@ -6,7 +6,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildHtml, processAppBundle, createServer } from "./shared.js";
+import { buildHtml, processAppBundle, processMermaidBundle, processElkBundle, createServer } from "./shared.js";
 
 // Read the browser bundles once at startup and inline them into the HTML
 const extAppsEntry = fileURLToPath(import.meta.resolve("@modelcontextprotocol/ext-apps/app-with-deps"));
@@ -26,19 +26,25 @@ const pakoDeflateJs = fs.readFileSync(
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Inline the drawio-mermaid IIFE bundle (native Mermaid parser + layout,
-// replaces the upstream ~2.7 MB mermaid.min.js + extensions.min.js runtime).
-// Sibling-repo layout: ../../../drawio-mermaid/dist/mermaid.bundled.js. Build
-// drawio-mermaid (`npm run build`) before starting the MCP app server.
-const mermaidBundlePath = path.join(
-  __dirname, "..", "..", "..", "drawio-mermaid", "dist", "mermaid.bundled.js"
-);
-const mermaidJs = fs.readFileSync(mermaidBundlePath, "utf-8");
+// Inline the drawio-elk bundle (Eclipse Layout Kernel, ~790 KB). Ships as
+// ESM with a default export (the ELK class); processElkBundle strips the
+// export and aliases it to `var ELK` so it ends up on globalThis (consumed
+// by drawio-mermaid and mxElkLayout). MUST be loaded before drawio-mermaid.
+const elkJs = processElkBundle(fs.readFileSync(
+  path.join(__dirname, "..", "vendor", "elk", "drawio-elk.min.js"), "utf-8"
+));
+
+// Inline the drawio-mermaid bundle (native Mermaid parser + layout, replaces
+// the upstream ~2.7 MB mermaid.min.js + extensions.min.js runtime). Ships as
+// ESM since the recent dist refactor; processMermaidBundle strips the export
+// and aliases `mxMermaidToDrawio` to a global the viewer code can call.
+const mermaidJs = processMermaidBundle(fs.readFileSync(
+  path.join(__dirname, "..", "vendor", "mermaid", "drawio-mermaid.min.js"), "utf-8"
+));
 
 // Inline the mxElkLayout wrapper (vendored from drawio-dev origin/elk-layout
 // — see vendor/elk/README.md). Powers the optional postLayout pass on
-// create_diagram. The ELK engine itself is bundled into drawio-mermaid and
-// published as `globalThis.ELK` at load time.
+// create_diagram.
 const mxElkLayoutJs = fs.readFileSync(path.join(__dirname, "..", "vendor", "elk", "mxElkLayout.js"), "utf-8");
 
 // Optionally inline a local viewer build (for testing GraphViewer changes).
@@ -96,8 +102,10 @@ if (fs.existsSync(shapeIndexPath))
   console.log("Shape index: " + shapeIndex.length + " shapes");
 }
 
-// Pre-build the HTML once
-const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { viewerJs, mxElkLayoutJs });
+// Pre-build the HTML once. The build version timestamp is baked into
+// the HTML so the iframe can log it on startup (visible in DevTools).
+const buildVersion = "drawio-mcp-" + new Date().toISOString();
+const html = buildHtml(appWithDepsJs, pakoDeflateJs, mermaidJs, { viewerJs, elkJs, mxElkLayoutJs, buildVersion });
 
 // --- Transport setup ---
 
